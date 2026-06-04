@@ -144,15 +144,11 @@ func OpenAIManager(ctx context.Context, localMessages *[]openai.ChatCompletionMe
 	return openAIManagerWithTools(ctx, localMessages, orchestratorTools)
 }
 
-<<<<<<< HEAD
-func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
-=======
 func OpenAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
 	return openAIManagerWithTools(ctx, localMessages, tools)
 }
 
-func openAIManagerWithTools(_ context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
->>>>>>> telegram-integration
+func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
 	maxToolIterations := 40
 
 	for range maxToolIterations {
