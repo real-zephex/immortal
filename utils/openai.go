@@ -12,38 +12,9 @@ import (
 
 var openaiClient openai.Client
 
-type MessageType string
-
-const (
-	MessageTypeUser      MessageType = "user"
-	MessageTypeSystem    MessageType = "system"
-	MessageTypeAssistant MessageType = "assistant"
-	MessageTypeTool      MessageType = "tool"
-)
-
 const SubAgentSystemPrompt = `You are a sub-agent focused on completing the assigned task.
 You have access to bash tools. Respond concisely with only your findings.
 Do not ask follow-up questions or request additional tasks.`
-
-type OpenAIMessages struct {
-	MessageType MessageType
-	Content     string
-}
-
-func (r *OpenAIMessages) ToChatCompletionMessageParam(toolId string) openai.ChatCompletionMessageParamUnion {
-	switch r.MessageType {
-	case MessageTypeUser:
-		return openai.UserMessage(r.Content)
-	case MessageTypeSystem:
-		return openai.SystemMessage(r.Content)
-	case MessageTypeAssistant:
-		return openai.AssistantMessage(r.Content)
-	case MessageTypeTool:
-		return openai.ToolMessage(r.Content, toolId)
-	default:
-		return openai.UserMessage(r.Content)
-	}
-}
 
 func GetGroqKey() (string, error) {
 	key, exists := os.LookupEnv("OPENROUTER_KEY")
@@ -126,12 +97,55 @@ var (
 		},
 	}
 
+	sendDocumentTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "send_document_over_telegram",
+				Description: openai.String("Send a file as a document to the Telegram chat. Use this when the user needs a file delivered over Telegram."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"filepath": map[string]any{
+							"type":        "string",
+							"description": "Complete file path of the file to send",
+						},
+					},
+					"required": []string{"filepath"},
+				},
+			},
+		},
+	}
+
+	sendImageTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "send_image_over_telegram",
+				Description: openai.String("Send an image file to the Telegram chat. Use this when the user needs an image delivered over Telegram."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"filepath": map[string]any{
+							"type":        "string",
+							"description": "Complete file path of the image to send",
+						},
+					},
+					"required": []string{"filepath"},
+				},
+			},
+		},
+	}
+
 	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool}
 	subAgentTools     = []openai.ChatCompletionToolUnionParam{bashTool}
+	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool}
 )
 
 func OpenAIManager(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion) string {
 	return openAIManagerWithTools(ctx, localMessages, orchestratorTools)
+}
+
+func OpenAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
+	return openAIManagerWithTools(ctx, localMessages, tools)
 }
 
 func openAIManagerWithTools(_ context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
@@ -175,11 +189,7 @@ func openAIManagerWithTools(_ context.Context, localMessages *[]openai.ChatCompl
 				toolResult = err.Error()
 			}
 
-			toolMessage := OpenAIMessages{
-				MessageType: MessageTypeTool,
-				Content:     toolResult,
-			}
-			*localMessages = append(*localMessages, toolMessage.ToChatCompletionMessageParam(tool.ID))
+			*localMessages = append(*localMessages, openai.ToolMessage(toolResult, tool.ID))
 		}
 	}
 

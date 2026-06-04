@@ -2,11 +2,29 @@ module immortal
 
 go 1.25.10
 
-require github.com/openai/openai-go/v3 v3.39.0
+require (
+	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
+	github.com/microcosm-cc/bluemonday v1.0.27
+	github.com/openai/openai-go/v3 v3.39.0
+	github.com/russross/blackfriday/v2 v2.1.0
+	modernc.org/sqlite v1.51.0
+)
 
 require (
+	github.com/aymerick/douceur v0.2.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/css v1.0.1 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	golang.org/x/net v0.34.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	modernc.org/libc v1.72.3 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.11.0 // indirect
 )
