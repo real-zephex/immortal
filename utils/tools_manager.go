@@ -23,6 +23,10 @@ func ExecuteTool(toolName string, args map[string]any) (string, error) {
 		return executeBash(args)
 	case "spawn_agents":
 		return executeSpawnAgents(args)
+	case "send_document_over_telegram":
+		return executeSendDocument(args)
+	case "send_image_over_telegram":
+		return executeSendImage(args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -142,4 +146,38 @@ func executeSpawnAgents(args map[string]any) (string, error) {
 		out = append(out, results[t.ID])
 	}
 	return strings.Join(out, "\n"), nil
+}
+
+func executeSendDocument(args map[string]any) (string, error) {
+	filepath, ok := args["filepath"].(string)
+	if !ok || strings.TrimSpace(filepath) == "" {
+		return "", fmt.Errorf("filepath must be a non-empty string")
+	}
+
+	if CurrentTelegramChatID <= 0 {
+		return "", fmt.Errorf("telegram chat id is not set - this tool only works when communicating over Telegram")
+	}
+
+	if err := sendDocument(CurrentTelegramChatID, filepath); err != nil {
+		return "", fmt.Errorf("failed to send document: %v", err)
+	}
+
+	return fmt.Sprintf("Successfully sent document to Telegram: %s", filepath), nil
+}
+
+func executeSendImage(args map[string]any) (string, error) {
+	filepath, ok := args["filepath"].(string)
+	if !ok || strings.TrimSpace(filepath) == "" {
+		return "", fmt.Errorf("filepath must be a non-empty string")
+	}
+
+	if CurrentTelegramChatID <= 0 {
+		return "", fmt.Errorf("telegram chat id is not set - this tool only works when communicating over Telegram")
+	}
+
+	if err := sendImage(CurrentTelegramChatID, filepath); err != nil {
+		return "", fmt.Errorf("failed to send image: %v", err)
+	}
+
+	return fmt.Sprintf("Successfully sent image to Telegram: %s", filepath), nil
 }

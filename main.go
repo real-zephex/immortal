@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"immortal/utils"
 	"os"
@@ -26,12 +27,6 @@ type Event struct {
 	Type    EventType `json:"event"`
 	Payload any
 }
-
-var (
-	messages       []utils.OpenAIMessages
-	OpenAIMessages []openai.ChatCompletionMessageParamUnion
-	mu             sync.Mutex
-)
 
 func GetTasksFromFile() []string {
 	data, err := os.ReadFile("messages.txt")
@@ -62,19 +57,12 @@ func PushToChannelA(ctx context.Context, events chan<- Event, wg *sync.WaitGroup
 					}
 				}
 			}
-			for i := 0; i < 5; i++ {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(1 * time.Second):
-					fmt.Printf("Polling in %d seconds...\n", 5-i)
-				}
-			}
+			time.Sleep(5 * time.Second)
 		}
 	}
 }
 
-func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event) {
+func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event, db *sql.DB) {
 	defer wg.Done()
 
 	f, err := os.OpenFile("responses.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -103,18 +91,15 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event) {
 				continue
 			}
 
-			// IMPORTANT: do not increase ai workers otherwise it will mess up the context for all the workers
-			// mu.Lock()
-			tempUserMessage := &utils.OpenAIMessages{
-				MessageType: utils.MessageTypeUser,
-				Content:     content,
+			// Load full conversation from DB
+			params := utils.LoadConversation(db, "default")
+			if params == nil {
+				params = make([]openai.ChatCompletionMessageParamUnion, 0, 100)
 			}
-			OpenAIMessages = append(OpenAIMessages, tempUserMessage.ToChatCompletionMessageParam(""))
-			// mu.Unlock()
+			params = append(params, openai.UserMessage(content))
 
-			response := utils.OpenAIManager(ctx, &OpenAIMessages)
+			response := utils.OpenAIManager(ctx, &params)
 			if response != "" {
-				// mu.Lock()
 				responses++
 				currentCount := responses
 				timestamp := time.Now().Format("2006-01-02 15:04:05")
@@ -126,12 +111,9 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event) {
 				}
 
 				fmt.Printf("Processed task: %s (Total: %d)\n", content, currentCount)
-				// tempAssistantMessage := &utils.OpenAIMessages{
-				// 	MessageType: utils.MessageTypeAssistant,
-				// 	Content:     content,
-				// }
-				// OpenAIMessages = append(OpenAIMessages, tempAssistantMessage.ToChatCompletionMessageParam(""))
-				// mu.Unlock()
+
+				// Persist full conversation (preserves tool calls + results)
+				utils.SaveConversation(db, "default", params)
 			}
 		}
 	}
@@ -139,6 +121,11 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event) {
 
 func main() {
 	start := time.Now()
+
+	fmt.Println("Initializing database...")
+	db := utils.InitDB()
+	defer db.Close()
+	fmt.Println("Database initialized.")
 
 	fmt.Println("Initializing OpenAI client...")
 	err := utils.InitOpenAIClient()
@@ -165,15 +152,17 @@ func main() {
 
 	go PushToChannelA(ctx, eventsChannels, &wg)
 
-	go runAgent(&wg, ctx, eventsChannels)
-	// will keep it 1 always, trying to make an agent that does not die after its final response
-	// aiWorkers := 1
-	// for range aiWorkers {
-	// 	wg.Add(1)
-	// 	go func() {
-	// 		defer wg.Done()
-	// 	}()
-	// }
+	go runAgent(&wg, ctx, eventsChannels, db)
+
+	// Auto-start Telegram bot if TELEGRAM_BOT_TOKEN is set
+	if os.Getenv("TELEGRAM_BOT_TOKEN") != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			utils.StartTelegramBot(ctx, db)
+		}()
+		fmt.Println("Telegram bot goroutine started.")
+	}
 
 	wg.Wait()
 	end := time.Since(start)
