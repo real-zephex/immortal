@@ -1,217 +1,216 @@
 # Immortal Agent
 
-**A single-binary, file-polling AI agent with parallel sub-agent spawning, built in Go.**
+Immortal Agent is a small Go agent that watches `messages.txt`, sends each non-empty line to an LLM, lets the LLM call tools, and appends the final answer to `responses.txt`.
 
-Immortal Agent is not a framework. It is not a DSL. It does not require Python, pip, virtualenvs, or 400 dependencies. It is a single compiled binary that reads tasks from a text file, routes them through an LLM with tool access, and writes responses to another file. That is the entire surface area.
+The project is intentionally narrow. There is no HTTP server, no CLI parser, no database, no vector store, and no framework layer. The current binary is a file-polling orchestrator with two tools:
 
----
+- `bash_tool`: run a Bash command with a 30 second timeout.
+- `spawn_agents`: run multiple sub-agent LLM conversations concurrently, each with access to `bash_tool`.
 
-## Why another AI agent?
+## Motive
 
-Every AI agent framework in 2026 — LangChain, CrewAI, AutoGPT, OpenAI Agents SDK, Claude Agent SDK — shares a common DNA: they are Python or TypeScript libraries with deep abstraction stacks. You install hundreds of packages, learn opaque APIs, fight breaking changes on every version bump, and ultimately ship an agent that lives inside a framework you don't control.
+The main goal is to make an agent process that does not die after one final model response.
 
-Immortal Agent takes the opposite approach:
+In many agent setups, a run starts with one input, the model thinks, calls tools if needed, emits a final response, and the run is over. After that final response, the model cannot wake itself back up. Something outside the run has to start a new run.
 
-| Dimension | LangChain / CrewAI / AutoGPT | OpenAI Agents SDK | Immortal Agent |
-|-----------|-----------------------------|-------------------|----------------|
-| **Language** | Python / TypeScript | Python / TypeScript | **Go** |
-| **Deployment** | pip install + venv + 300+ deps | pip install + venv | **Single binary** |
-| **Interface** | Python SDK / API | SDK + API | **File-based (messages.txt → responses.txt)** |
-| **Agent loop** | Framework-managed (LangGraph graph, CrewAI process) | SDK-managed (Runner.run) | **Roll-your-own loop (predictable, debuggable)** |
-| **Tool execution** | Synchronous by default (even CrewAI runs tools sequentially per agent) | Synchronous by default (parallel tool execution is a feature request) | **Parallel via goroutines** |
-| **Sub-agents** | Built-in (CrewAI crews, LangGraph subgraphs, AutoGPT tasks) | Handoffs (transfers control, no concurrency) | **true concurrent goroutines** |
-| **Startup time** | 2-5s (Python interpreter + imports) | 1-3s (Python interpreter) | **~5ms** |
-| **Memory footprint** | 150-400 MB | 100-300 MB | **~15 MB** |
-| **State management** | Framework-managed (conversation buffers, vector stores) | SDK-managed (session, to_input_list, previous_response_id) | **Explicit — you control what goes in the next call** |
-| **Observability** | OpenTelemetry / LangSmith / vendor SDKs | OpenAI Traces / third-party | **Plain stdout + file logs** |
-| **API stability** | Breaking changes every few months | Stable but evolving | **Zero abstraction — you control the HTTP** |
+Immortal Agent keeps the outer process alive. The LLM/tool loop can finish for one task, but `runAgent` keeps waiting on the main event channel. Any new event pushed into that channel wakes the agent again with the existing in-memory conversation history.
 
-### What the comparisons don't tell you
+`messages.txt` is just the current event source. The same shape could support other inputs. For example, a Telegram polling loop could run in a separate goroutine and push incoming Telegram messages into the event channel. Sending the response back to Telegram would need its own output handling, but the core trigger stays the same: push an event, wake the agent, let it work, then keep the process alive for the next event.
 
-**LangChain / LangGraph** has 600+ integrations, but it also has 600+ abstractions you have to learn. The graph-based agent loop is powerful — if your use case requires branching state machines, conditional edges, and human-in-the-loop checkpoints. LangGraph does that well. But most agent tasks do not need a DAG. Most agent tasks need "call LLM → execute tool → call LLM again → return." LangGraph's boilerplate for that loop is absurd.
+## Current Shape
 
-**CrewAI** is the closest philosophical cousin to Immortal Agent's sub-agent system. You define agents with roles, assign them tasks, and a crew manager orchestrates. The insight is correct — parallel specialized agents beat monolithic generalists. In practice, CrewAI agents execute tools **sequentially within each agent** (a known limitation), and the crew orchestration runs inside a single Python process with the GIL. Immortal Agent's sub-agents are true OS-level goroutines with real parallelism.
-
-**AutoGPT** pioneered the autonomous loop, but it is not production-grade in 2026. Infinite retry loops, runaway API costs, and unpredictable behavior are well-documented failure modes. It remains a prototyping tool.
-
-**OpenAI Agents SDK** is lean by modern standards (four primitives, one runner, one decorator). The handoff pattern transfers control between specialized agents, but does not run them concurrently — Agent A stops, Agent B starts. Immortal Agent's sub-agents all run simultaneously.
-
-**Claude Agent SDK** wraps Claude Code's capabilities programmatically. It is single-threaded by design (Anthropic's "nO master loop"), with limited sub-agent spawning for controlled parallelism. The architecture is intentionally simple, similar in philosophy to Immortal Agent — but tied to Claude and npm/PyPI.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    immortal-agent                     │
-│                                                       │
-│  messages.txt  ──►  PushToChannelA  ──►  runAgent    │
-│                   (polls every 5s)     (event loop)   │
-│                                            │          │
-│                                            ▼          │
-│                                     OpenAIManager()    │
-│                                     ┌──────────┐      │
-│                                     │ Loop:     │      │
-│                                     │ LLM call  │      │
-│                                     │ tool?     │      │
-│                                     │ execute   │◄──── │
-│                                     │ append    │      │
-│                                     │ repeat    │      │
-│                                     └──────────┘      │
-│                                            │          │
-│                              ExecuteTool()            │
-│                              ┌──────────────┐         │
-│                              │ bash_tool     │         │
-│                              │ spawn_agents  │──┐      │
-│                              └──────────────┘  │      │
-│                                                 │      │
-│                                   ┌─────────────┴───┐  │
-│                                   │ goroutine 1     │  │
-│                                   │ goroutine 2     │  │
-│                                   │ goroutine N     │  │
-│                                   │ each calls      │  │
-│                                   │ OpenAIManager   │  │
-│                                   │ with bash_tool  │  │
-│                                   └─────────────────┘  │
-│                                            │          │
-│                              WaitGroup sync            │
-│                              results converge         │
-│                                            │          │
-│                                            ▼          │
-│                                orchestrator LLM       │
-│                              re-invoked with results  │
-│                                            │          │
-│                                            ▼          │
-│  responses.txt  ◄──── final response                 │
-└─────────────────────────────────────────────────────┘
+```text
+messages.txt
+    |
+    | polled every ~5 seconds, then cleared
+    v
+main.go
+    |
+    | appends user messages to one shared conversation
+    v
+utils.OpenAIManager
+    |
+    | calls OpenRouter through openai-go
+    | model: openai/gpt-oss-120b:free
+    v
+tool loop
+    |
+    | no tool calls: return assistant text
+    | tool calls: execute tools, append tool results, call model again
+    v
+responses.txt
 ```
 
-### The loop (the important part)
+`main.go` starts two goroutines:
 
-Immortal Agent uses a standard ReAct loop, but with a critical property: **every tool call result is appended to the message history, and the LLM is re-invoked immediately**. This repeats until the LLM produces a text response with no tool calls. The loop is time-boxed to 40 iterations to prevent runaway costs.
+- `PushToChannelA` reads `messages.txt`, splits it by newline, clears the file, and pushes each non-empty line onto an event channel.
+- `runAgent` consumes those events one at a time, keeps a shared OpenAI chat history in memory, calls the LLM/tool loop, and appends timestamped results to `responses.txt`.
 
-Most frameworks do the same thing, but they bury it behind abstractions. Here it is explicit:
+The agent stays alive until it receives `SIGINT` or `SIGTERM`.
+
+## Provider
+
+The active client is in `utils/openai.go`.
+
+It uses the official `github.com/openai/openai-go/v3` SDK against OpenRouter:
 
 ```go
-for range maxToolIterations {
-    response := llm.Call(messages, tools)
-    messages = append(messages, response.Message)
-
-    if len(response.ToolCalls) == 0 {
-        return response.Content  // done
-    }
-
-    for _, tool := range response.ToolCalls {
-        result := ExecuteTool(tool.Name, tool.Args)
-        messages = append(messages, ToolMessage(result, tool.ID))
-    }
-    // loop continues — LLM sees tool results and decides next action
-}
+option.WithBaseURL("https://openrouter.ai/api/v1")
+Model: "openai/gpt-oss-120b:free"
 ```
 
-### Sub-agents (true parallelism)
+Required environment variable:
 
-The `spawn_agents` tool is the key differentiator. When the orchestrator LLM decides a task can be parallelized, it calls this tool with a list of sub-tasks:
-
-```json
-{
-  "sub_agents": [
-    {"id": 0, "task": "Check Go version"},
-    {"id": 1, "task": "Check disk space"},
-    {"id": 2, "task": "Check memory usage"}
-  ],
-  "reason": "Need system information in parallel"
-}
+```bash
+export OPENROUTER_KEY="..."
 ```
 
-Each sub-agent gets its own goroutine, its own LLM conversation (with a stripped system prompt), and its own tool access (`bash_tool`). They run concurrently and results converge via `sync.WaitGroup`. Failed agents are reported inline, not silently dropped.
+This is not tied to OpenRouter at the architecture level. The project uses OpenAI-compatible chat completions and tool calling, so any provider with a compatible API can be used by changing `InitOpenAIClient`, the base URL, the model name, and the environment variable read by `GetGroqKey`.
 
-This is architecturally different from the handoff pattern (OpenAI Agents SDK), the sequential-within-agent pattern (CrewAI), or the single-threaded loop (Claude Code).
-
----
+There is also a `utils/groq.go` file with a raw Groq chat-completions client, but it is not used by `main.go` and does not support the current tool loop.
 
 ## Quick Start
 
 ```bash
-# Set your API key (uses Groq's OpenAI-compatible endpoint by default)
-export GROQ_API_KEY="gsk-..."
+export OPENROUTER_KEY="..."
 
-# Build
 go build -o agent
-
-# Run (it will poll messages.txt every 5 seconds)
 ./agent
-
-# In another terminal, write tasks
-echo "List the files in the current directory" > messages.txt
-
-# Responses appear in responses.txt
 ```
 
-### Test with the included prompts
+In another terminal:
 
 ```bash
-cat > messages.txt << 'EOF'
-Spawn sub-agents to check Go version and disk space in parallel
-Use bash to check what OS this is
+echo "Use bash to list the files in this project" > messages.txt
+```
+
+The agent will clear `messages.txt` after reading it and append the answer to `responses.txt`.
+
+You can queue multiple tasks by writing one task per line:
+
+```bash
+cat > messages.txt <<'EOF'
+Use bash to print the current directory
+Spawn sub-agents to check Go version, disk space, and uptime in parallel
 EOF
 ```
 
----
+## Tools
 
-## Project Structure
+### `bash_tool`
 
+Schema:
+
+```json
+{
+  "command": "string",
+  "reason": "string"
+}
 ```
+
+Behavior:
+
+- Runs `bash -c <command>`.
+- Captures stdout and stderr.
+- Adds process errors to the returned output instead of failing silently.
+- Kills the command after 30 seconds.
+- Truncates output above 100 KiB.
+
+This is not sandboxed by the project. The command runs with the permissions of the `agent` process.
+
+### `spawn_agents`
+
+Schema:
+
+```json
+{
+  "sub_agents": [
+    {
+      "id": 1,
+      "task": "Check the Go version"
+    }
+  ],
+  "reason": "Why these tasks should run in parallel"
+}
+```
+
+Behavior:
+
+- Parses the requested sub-agent tasks.
+- Starts one goroutine per sub-agent.
+- Gives each sub-agent a fresh chat history:
+  - system prompt: `SubAgentSystemPrompt`
+  - user message: the sub-task
+- Allows sub-agents to use only `bash_tool`, not `spawn_agents`.
+- Waits for all goroutines with `sync.WaitGroup`.
+- Returns each result in the original task order.
+
+The orchestrator receives the combined sub-agent output as a normal tool result, then calls the LLM again to summarize or continue.
+
+## LLM Loop
+
+The core loop lives in `openAIManagerWithTools`:
+
+1. Send the current message history and tool definitions to the model.
+2. Append the assistant message to the same history.
+3. If there are no tool calls, return the assistant text.
+4. If there are tool calls, execute each one.
+5. Append each tool result as a tool message.
+6. Repeat, up to 40 iterations.
+
+This is the important behavior: tool results are not terminal output. They become part of the conversation and the model gets another turn to decide what to do next.
+
+## Files
+
+```text
 .
-├── main.go                    # Entry point: event loop, signal handling, file polling
-├── messages.txt               # Input pipe — newline-separated tasks
-├── responses.txt              # Output log — timestamped User/Assistant exchanges
+├── main.go
+│   └── process lifecycle, file polling, event channel, response logging
+├── messages.txt
+│   └── input file; one task per non-empty line
+├── responses.txt
+│   └── append-only response log
 ├── utils/
-│   ├── openai.go              # LLM client, tool definitions, agent loop, sub-agent prompt
-│   ├── groq.go                # (deprecated) raw Groq HTTP client, no tool support
-│   └── tools_manager.go       # Tool dispatch: bash_tool, spawn_agents
-├── go.mod                     # Module: immortal, Go 1.25.10
+│   ├── openai.go
+│   │   └── OpenRouter client setup, OpenAI message helpers, tool schemas, LLM loop
+│   ├── tools_manager.go
+│   │   └── tool dispatcher, Bash execution, parallel sub-agent execution
+│   └── groq.go
+│       └── unused older Groq HTTP client
+├── go.mod
 └── go.sum
 ```
 
----
+## Design Notes
 
-## Key Design Decisions
-
-### File-based IPC (not HTTP, not WebSocket, not gRPC)
-
-`messages.txt` and `responses.txt` are the interface. This is intentional:
-- **Zero infrastructure** — no server to run, no ports to manage, no API to secure
-- **Composable** — pipe tasks from cron, CI/CD, shell scripts, or any language
-- **Observable by default** — the entire conversation history is in a plain text file
-- **Pausable** — stop the agent, edit messages.txt, restart. It picks up where it left off
-
-### Single-threaded orchestrator
-
-The orchestrator runs in one goroutine with one conversation history. Concurrency is handled by sub-agents, not by adding `aiWorkers`. This avoids:
-- Conversation history corruption (shared state between parallel LLM calls)
-- Rate limit contention (multiple orchestrators hitting the same API endpoint)
-- Non-deterministic response ordering
-
-### Stripped sub-agent prompts
-
-Sub-agents get a minimal system prompt: "You are a sub-agent focused on completing the assigned task. You have access to bash tools. Respond concisely with only your findings. Do not ask follow-up questions or request additional tasks." This prevents sub-agents from wandering into meta-conversations.
-
-### Tool results are opaque strings
-
-Tools return `(string, error)`. The orchestrator LLM receives the raw tool output in a tool-role message. There is no schema enforcement, no structured output parsing, no middleware. If the tool returns garbage, the LLM sees garbage. This is a deliberate simplicity trade.
-
----
+- The orchestrator is single-consumer by design. `runAgent` processes events sequentially so one shared conversation history does not get mutated by multiple workers at once.
+- Conversation history is in memory only. `responses.txt` is a log, not a source of restored state after restart.
+- `messages.txt` is destructive input. Once read, it is cleared.
+- `responses.txt` is append-only and can grow indefinitely.
+- The `ctx` passed into `OpenAIManager` is currently not used for the OpenAI request; the request uses `context.TODO()`.
+- Sub-agents use `context.Background()`, so they do not inherit shutdown cancellation.
+- The project assumes a Unix-like environment with `bash`.
 
 ## Requirements
 
-- Go 1.25+
-- `GROQ_API_KEY` environment variable (or any OpenAI-compatible endpoint — modify `BASE_URL` in `openai.go:64`)
-- Linux (for `bash_tool`; macOS should work, Windows needs WSL)
+- Go `1.25.10` as declared in `go.mod`
+- `OPENROUTER_KEY` for the current OpenRouter configuration, or equivalent credentials after adapting `InitOpenAIClient` for another OpenAI-compatible provider
+- Bash
 
----
+## Build
+
+```bash
+go build -o agent
+```
+
+## Run
+
+```bash
+./agent
+```
+
+Stop with `Ctrl-C`.
 
 ## License
 
-MIT. Do what you want.
+MIT.
