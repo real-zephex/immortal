@@ -1,5 +1,0 @@
-Use sub-agents to check the Go version, disk space, memory usage, and running processes in parallel
-Spawn sub-agents to find all .go files, count total lines, and list all functions defined across the codebase
-I need a system audit: spawn agents to check kernel version, uptime, CPU info, and network interfaces simultaneously
-Spawn sub-agents to search for TODO comments, FIXME markers, and hardcoded strings in the source code
-Use sub-agents to check if python3, node, and rustc are installed, and what versions
