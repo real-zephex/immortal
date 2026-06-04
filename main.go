@@ -103,6 +103,7 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event) {
 				continue
 			}
 
+			// IMPORTANT: do not increase ai workers otherwise it will mess up the context for all the workers
 			// mu.Lock()
 			tempUserMessage := &utils.OpenAIMessages{
 				MessageType: utils.MessageTypeUser,
@@ -159,7 +160,7 @@ func main() {
 	}()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	eventsChannels := make(chan Event, 100)
 
 	go PushToChannelA(ctx, eventsChannels, &wg)
