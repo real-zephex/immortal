@@ -46,7 +46,7 @@ func (r *OpenAIMessages) ToChatCompletionMessageParam(toolId string) openai.Chat
 }
 
 func GetGroqKey() (string, error) {
-	key, exists := os.LookupEnv("OPENROUTER_KEY")
+	key, exists := os.LookupEnv("DEEPSEEK_API_KEY")
 	if !exists {
 		return "", fmt.Errorf("The API key is not set")
 	}
@@ -60,7 +60,7 @@ func InitOpenAIClient() error {
 	}
 	client := openai.NewClient(
 		option.WithAPIKey(key),
-		option.WithBaseURL("https://openrouter.ai/api/v1"),
+		option.WithBaseURL("https://api.deepseek.com"),
 	)
 	openaiClient = client
 	return nil
@@ -134,15 +134,15 @@ func OpenAIManager(ctx context.Context, localMessages *[]openai.ChatCompletionMe
 	return openAIManagerWithTools(ctx, localMessages, orchestratorTools)
 }
 
-func openAIManagerWithTools(_ context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
+func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
 	maxToolIterations := 40
 
 	for range maxToolIterations {
 		chatCompletion, err := openaiClient.Chat.Completions.New(
-			context.TODO(),
+			ctx,
 			openai.ChatCompletionNewParams{
 				Messages: *localMessages,
-				Model:    "openai/gpt-oss-120b:free",
+				Model:    "deepseek-v4-flash",
 				Tools:    tools,
 			},
 		)
