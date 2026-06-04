@@ -28,9 +28,9 @@ type Event struct {
 }
 
 var (
-	messages []utils.OpenAIMessages
+	messages       []utils.OpenAIMessages
 	OpenAIMessages []openai.ChatCompletionMessageParamUnion
-	mu       sync.Mutex
+	mu             sync.Mutex
 )
 
 func GetTasksFromFile() []string {
@@ -74,7 +74,9 @@ func PushToChannelA(ctx context.Context, events chan<- Event, wg *sync.WaitGroup
 	}
 }
 
-func runAgent(ctx context.Context, events <-chan Event) {
+func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event) {
+	defer wg.Done()
+
 	f, err := os.OpenFile("responses.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		fmt.Printf("Error opening responses file: %v\n", err)
@@ -101,22 +103,17 @@ func runAgent(ctx context.Context, events <-chan Event) {
 				continue
 			}
 
-			mu.Lock()
+			// mu.Lock()
 			tempUserMessage := &utils.OpenAIMessages{
 				MessageType: utils.MessageTypeUser,
-				Content: content,
+				Content:     content,
 			}
-			// messages = append(messages, utils.OpenAIMessages{
-			// 	MessageType: utils.MessageTypeUser,
-			// 	Content:     content,
-			// })
 			OpenAIMessages = append(OpenAIMessages, tempUserMessage.ToChatCompletionMessageParam(""))
-			mu.Unlock()
+			// mu.Unlock()
 
-			//TODO: Convert messages to OpenAI message params
-			response := utils.OpenAIManager(ctx, OpenAIMessages)
+			response := utils.OpenAIManager(ctx, &OpenAIMessages)
 			if response != "" {
-				mu.Lock()
+				// mu.Lock()
 				responses++
 				currentCount := responses
 				timestamp := time.Now().Format("2006-01-02 15:04:05")
@@ -128,13 +125,12 @@ func runAgent(ctx context.Context, events <-chan Event) {
 				}
 
 				fmt.Printf("Processed task: %s (Total: %d)\n", content, currentCount)
-				tempAssistantMessage := &utils.OpenAIMessages{
-					MessageType: utils.MessageTypeAssistant,
-					Content: content,
-				}
-				OpenAIMessages = append(OpenAIMessages, tempAssistantMessage.ToChatCompletionMessageParam(""))
-				// messages = append(messages, utils.Message{Role: "assistant", Content: response})
-				mu.Unlock()
+				// tempAssistantMessage := &utils.OpenAIMessages{
+				// 	MessageType: utils.MessageTypeAssistant,
+				// 	Content:     content,
+				// }
+				// OpenAIMessages = append(OpenAIMessages, tempAssistantMessage.ToChatCompletionMessageParam(""))
+				// mu.Unlock()
 			}
 		}
 	}
@@ -142,6 +138,15 @@ func runAgent(ctx context.Context, events <-chan Event) {
 
 func main() {
 	start := time.Now()
+
+	fmt.Println("Initializing OpenAI client...")
+	err := utils.InitOpenAIClient()
+	if err != nil {
+		fmt.Printf("Error initializing OpenAI client: %v\n", err)
+		return
+	}
+	fmt.Println("OpenAI client initialized successfully.")
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -159,14 +164,15 @@ func main() {
 
 	go PushToChannelA(ctx, eventsChannels, &wg)
 
-	aiWorkers := 1
-	for range aiWorkers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			runAgent(ctx, eventsChannels)
-		}()
-	}
+	go runAgent(&wg, ctx, eventsChannels)
+	// will keep it 1 always, trying to make an agent that does not die after its final response
+	// aiWorkers := 1
+	// for range aiWorkers {
+	// 	wg.Add(1)
+	// 	go func() {
+	// 		defer wg.Done()
+	// 	}()
+	// }
 
 	wg.Wait()
 	end := time.Since(start)
