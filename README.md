@@ -1,11 +1,13 @@
 # Immortal Agent
 
-Immortal Agent is a small Go agent that watches `messages.txt`, sends each non-empty line to an LLM, lets the LLM call tools, and appends the final answer to `responses.txt`.
+Immortal Agent is a small Go agent runtime that stays alive after a model finishes a response. It accepts work from long-running input loops, sends that work through an OpenAI-compatible chat-completions model with tools, persists conversation state, and then waits for the next event.
 
-The project is intentionally narrow. There is no HTTP server, no CLI parser, no database, no vector store, and no framework layer. The current binary is a file-polling orchestrator with two tools:
+The current project has two input paths:
 
-- `bash_tool`: run a Bash command with a 30 second timeout.
-- `spawn_agents`: run multiple sub-agent LLM conversations concurrently, each with access to `bash_tool`.
+- file polling: read tasks from `messages.txt`, process them, and append answers to `responses.txt`
+- Telegram polling: when `TELEGRAM_BOT_TOKEN` is set, run a Telegram bot loop and answer messages in Telegram
+
+It is still intentionally small. There is no web server, no framework layer, no queue service, and no separate worker process.
 
 ## Motive
 
@@ -13,66 +15,82 @@ The main goal is to make an agent process that does not die after one final mode
 
 In many agent setups, a run starts with one input, the model thinks, calls tools if needed, emits a final response, and the run is over. After that final response, the model cannot wake itself back up. Something outside the run has to start a new run.
 
-Immortal Agent keeps the outer process alive. The LLM/tool loop can finish for one task, but `runAgent` keeps waiting on the main event channel. Any new event pushed into that channel wakes the agent again with the existing in-memory conversation history.
+Immortal Agent keeps the outer process alive. One LLM/tool loop can finish, but the Go process keeps waiting for more input. A file write, Telegram message, or future event source can wake the agent again.
 
-`messages.txt` is just the current event source. The same shape could support other inputs. For example, a Telegram polling loop could run in a separate goroutine and push incoming Telegram messages into the event channel. Sending the response back to Telegram would need its own output handling, but the core trigger stays the same: push an event, wake the agent, let it work, then keep the process alive for the next event.
+That is the core shape: event source in, model/tool loop runs, response goes out, process remains alive.
 
 ## Current Shape
 
 ```text
-messages.txt
-    |
-    | polled every ~5 seconds, then cleared
-    v
-main.go
-    |
-    | appends user messages to one shared conversation
-    v
-utils.OpenAIManager
-    |
-    | calls OpenRouter through openai-go
-    | model: openai/gpt-oss-120b:free
-    v
-tool loop
-    |
-    | no tool calls: return assistant text
-    | tool calls: execute tools, append tool results, call model again
-    v
-responses.txt
+                    ┌────────────────────────────┐
+messages.txt ────► │ file polling goroutine     │
+                    │ PushToChannelA             │
+                    └─────────────┬──────────────┘
+                                  │
+                                  v
+                    ┌────────────────────────────┐
+                    │ main event channel          │
+                    └─────────────┬──────────────┘
+                                  │
+                                  v
+                    ┌────────────────────────────┐
+                    │ runAgent                    │
+                    │ channel: "default"          │
+                    └─────────────┬──────────────┘
+                                  │
+                                  v
+                    ┌────────────────────────────┐
+                    │ SQLite conversation state   │
+                    │ ~/.immortal-agent.db        │
+                    └─────────────┬──────────────┘
+                                  │
+                                  v
+                    ┌────────────────────────────┐
+                    │ OpenAI-compatible LLM loop  │
+                    │ tools allowed               │
+                    └─────────────┬──────────────┘
+                                  │
+                                  v
+responses.txt ◄──────────────── final answer
+
+
+Telegram, if enabled:
+
+Telegram updates ─► StartTelegramBot ─► channel: "telegram:<chat_id>"
+                                  │
+                                  v
+                    same SQLite state + same LLM loop
+                                  │
+                                  v
+                    Telegram reply / document / image
 ```
 
-`main.go` starts two goroutines:
+`main.go` starts the file polling path by default. If `TELEGRAM_BOT_TOKEN` exists, it also starts the Telegram bot in another goroutine.
 
-- `PushToChannelA` reads `messages.txt`, splits it by newline, clears the file, and pushes each non-empty line onto an event channel.
-- `runAgent` consumes those events one at a time, keeps a shared OpenAI chat history in memory, calls the LLM/tool loop, and appends timestamped results to `responses.txt`.
-
-The agent stays alive until it receives `SIGINT` or `SIGTERM`.
+The process exits only on `SIGINT`, `SIGTERM`, or startup failure.
 
 ## Provider
 
 The active client is in `utils/openai.go`.
 
-It uses the official `github.com/openai/openai-go/v3` SDK against OpenRouter:
-
-```go
-option.WithBaseURL("https://openrouter.ai/api/v1")
-Model: "openai/gpt-oss-120b:free"
-```
-
-Required environment variable:
+It uses `github.com/openai/openai-go/v3` with a configurable base URL and model:
 
 ```bash
-export OPENROUTER_KEY="..."
+./agent --base-url https://openrouter.ai/api/v1 --model deepseek-v4-flash
 ```
 
-This is not tied to OpenRouter at the architecture level. The project uses OpenAI-compatible chat completions and tool calling, so any provider with a compatible API can be used by changing `InitOpenAIClient`, the base URL, the model name, and the environment variable read by `GetGroqKey`.
+Defaults:
 
-There is also a `utils/groq.go` file with a raw Groq chat-completions client, but it is not used by `main.go` and does not support the current tool loop.
+- base URL: `https://openrouter.ai/api/v1`
+- model: `deepseek-v4-flash`
+- API key environment variable: `IMMORTAL_API_KEY`
+
+This is not tied to OpenRouter. Any OpenAI-compatible provider can be used if it supports chat completions and the tool-calling format expected by `openai-go`.
 
 ## Quick Start
 
 ```bash
-export OPENROUTER_KEY="..."
+export IMMORTAL_API_KEY="..."
 
 go build -o agent
 ./agent
@@ -84,9 +102,9 @@ In another terminal:
 echo "Use bash to list the files in this project" > messages.txt
 ```
 
-The agent will clear `messages.txt` after reading it and append the answer to `responses.txt`.
+The agent polls `messages.txt` every 5 seconds, clears it after reading, and writes the final answer to `responses.txt`.
 
-You can queue multiple tasks by writing one task per line:
+Queue multiple tasks with one task per non-empty line:
 
 ```bash
 cat > messages.txt <<'EOF'
@@ -95,11 +113,77 @@ Spawn sub-agents to check Go version, disk space, and uptime in parallel
 EOF
 ```
 
+Clear persisted conversation history:
+
+```bash
+./agent --clear
+```
+
+## Telegram
+
+Telegram support starts automatically when `TELEGRAM_BOT_TOKEN` is set:
+
+```bash
+export TELEGRAM_BOT_TOKEN="..."
+./agent
+```
+
+Telegram behavior:
+
+- `/start` and `/help` are handled directly.
+- Normal text messages are sent to the LLM loop.
+- Each Telegram chat gets its own persisted channel: `telegram:<chat_id>`.
+- Replies include the replied-to message text as context.
+- Long responses are split into Telegram-sized chunks.
+- Markdown output is converted to sanitized Telegram HTML.
+- Voice messages are downloaded from Telegram and transcribed with Groq Whisper.
+- The model can send files or images back to the current Telegram chat through Telegram-only tools.
+
+Voice transcription requires:
+
+```bash
+export GROQ_API_KEY="..."
+```
+
+## Persistent State
+
+Conversation state is stored in SQLite at:
+
+```text
+~/.immortal-agent.db
+```
+
+The `conversations` table stores one JSON message array per channel:
+
+- `default` for the file polling path
+- `telegram:<chat_id>` for Telegram chats
+
+The saved message array includes user messages, assistant messages, tool calls, and tool results. `responses.txt` is only a log; it is not used to restore state.
+
 ## Tools
 
-### `bash_tool`
+### Core Tools
 
-Schema:
+These are available to the file-polling orchestrator:
+
+- `bash_tool`: run `bash -c <command>` with a 30 second timeout and 100 KiB output cap.
+- `spawn_agents`: run multiple sub-agent LLM conversations concurrently.
+- `web_search`: search the web through Jina.
+- `url_fetch`: fetch URL content through Jina.
+- `mail`: manage AgentMail inbox threads and messages.
+
+Sub-agents get a smaller tool set:
+
+- `bash_tool`
+- `web_search`
+- `url_fetch`
+
+Telegram conversations get the core tools plus:
+
+- `send_document_over_telegram`
+- `send_image_over_telegram`
+
+### `bash_tool`
 
 ```json
 {
@@ -108,19 +192,9 @@ Schema:
 }
 ```
 
-Behavior:
-
-- Runs `bash -c <command>`.
-- Captures stdout and stderr.
-- Adds process errors to the returned output instead of failing silently.
-- Kills the command after 30 seconds.
-- Truncates output above 100 KiB.
-
-This is not sandboxed by the project. The command runs with the permissions of the `agent` process.
+This is not sandboxed by the project. Commands run with the permissions of the `agent` process.
 
 ### `spawn_agents`
-
-Schema:
 
 ```json
 {
@@ -134,18 +208,72 @@ Schema:
 }
 ```
 
-Behavior:
+Each sub-agent gets a fresh conversation with `SubAgentSystemPrompt`, runs in its own goroutine, and returns its result to the orchestrator as one combined tool response.
 
-- Parses the requested sub-agent tasks.
-- Starts one goroutine per sub-agent.
-- Gives each sub-agent a fresh chat history:
-  - system prompt: `SubAgentSystemPrompt`
-  - user message: the sub-task
-- Allows sub-agents to use only `bash_tool`, not `spawn_agents`.
-- Waits for all goroutines with `sync.WaitGroup`.
-- Returns each result in the original task order.
+### `web_search`
 
-The orchestrator receives the combined sub-agent output as a normal tool result, then calls the LLM again to summarize or continue.
+```json
+{
+  "topic": "string"
+}
+```
+
+Uses Jina search at `https://s.jina.ai`. Requires:
+
+```bash
+export JINA_API_KEY="..."
+```
+
+### `url_fetch`
+
+```json
+{
+  "url": "string"
+}
+```
+
+Uses Jina Reader at `https://r.jina.ai`. Requires `JINA_API_KEY`.
+
+### `mail`
+
+```json
+{
+  "action": "get_threads | get_thread | send_email | reply_to_message | forward_message | delete_thread"
+}
+```
+
+Backed by AgentMail at `https://api.agentmail.to/v0`.
+
+Requires:
+
+```bash
+export AGENT_MAIL_API_KEY="..."
+export INBOX_NAME="..."
+```
+
+Supported actions:
+
+- `get_threads`
+- `get_thread` with `thread_id`
+- `send_email` with `to`, `subject`, and `text` or `html`
+- `reply_to_message` with `message_id`, `to`, `reply_to`, and `text` or `html`
+- `forward_message` with `message_id` and `to`
+- `delete_thread` with `thread_id`
+
+### Telegram Send Tools
+
+Only useful during a Telegram conversation, because they rely on the current Telegram chat ID.
+
+```json
+{
+  "filepath": "/absolute/or/relative/path"
+}
+```
+
+Tools:
+
+- `send_document_over_telegram`
+- `send_image_over_telegram`
 
 ## LLM Loop
 
@@ -158,44 +286,62 @@ The core loop lives in `openAIManagerWithTools`:
 5. Append each tool result as a tool message.
 6. Repeat, up to 40 iterations.
 
-This is the important behavior: tool results are not terminal output. They become part of the conversation and the model gets another turn to decide what to do next.
+The active request context is passed into `openaiClient.Chat.Completions.New`, so shutdown cancellation can stop in-flight top-level model calls. Sub-agents currently use `context.Background()`.
 
 ## Files
 
 ```text
 .
 ├── main.go
-│   └── process lifecycle, file polling, event channel, response logging
-├── messages.txt
-│   └── input file; one task per non-empty line
-├── responses.txt
-│   └── append-only response log
+│   └── flags, lifecycle, DB init, file event channel, optional Telegram startup
 ├── utils/
+│   ├── db.go
+│   │   └── SQLite conversation persistence
 │   ├── openai.go
-│   │   └── OpenRouter client setup, OpenAI message helpers, tool schemas, LLM loop
+│   │   └── OpenAI-compatible client setup, tool schemas, LLM loop
+│   ├── telegram.go
+│   │   └── Telegram polling, replies, voice transcription, media sending
+│   ├── tool_mail.go
+│   │   └── AgentMail API tool
 │   ├── tools_manager.go
-│   │   └── tool dispatcher, Bash execution, parallel sub-agent execution
+│   │   └── tool dispatcher, Bash, sub-agents, Jina search/fetch, Telegram send tools
 │   └── groq.go
-│       └── unused older Groq HTTP client
+│       └── older raw chat-completions client
 ├── go.mod
 └── go.sum
 ```
 
+Runtime files:
+
+- `messages.txt`: file input source, cleared after polling
+- `responses.txt`: append-only file output log
+- `~/.immortal-agent.db`: persisted conversation state
+
 ## Design Notes
 
-- The orchestrator is single-consumer by design. `runAgent` processes events sequentially so one shared conversation history does not get mutated by multiple workers at once.
-- Conversation history is in memory only. `responses.txt` is a log, not a source of restored state after restart.
+- The process is resident. Final model responses do not stop the agent process.
+- The file path and Telegram path both reuse the same LLM/tool loop, but they have different input and output handling.
+- File polling uses a single `default` conversation channel.
+- Telegram uses one conversation channel per chat ID.
+- Conversation history is durable across restarts through SQLite.
+- `responses.txt` can grow indefinitely.
 - `messages.txt` is destructive input. Once read, it is cleared.
-- `responses.txt` is append-only and can grow indefinitely.
-- The `ctx` passed into `OpenAIManager` is currently not used for the OpenAI request; the request uses `context.TODO()`.
-- Sub-agents use `context.Background()`, so they do not inherit shutdown cancellation.
-- The project assumes a Unix-like environment with `bash`.
+- `bash_tool` is powerful and unsandboxed.
+- `CurrentTelegramChatID` is global, so concurrent Telegram chats sending media at the same time could race.
+- Sub-agents do not inherit the parent cancellation context.
 
 ## Requirements
 
 - Go `1.25.10` as declared in `go.mod`
-- `OPENROUTER_KEY` for the current OpenRouter configuration, or equivalent credentials after adapting `InitOpenAIClient` for another OpenAI-compatible provider
+- `IMMORTAL_API_KEY`
 - Bash
+
+Optional features need their own keys:
+
+- `TELEGRAM_BOT_TOKEN` for Telegram
+- `GROQ_API_KEY` for Telegram voice transcription
+- `JINA_API_KEY` for `web_search` and `url_fetch`
+- `AGENT_MAIL_API_KEY` and `INBOX_NAME` for `mail`
 
 ## Build
 
@@ -207,6 +353,12 @@ go build -o agent
 
 ```bash
 ./agent
+```
+
+With a custom OpenAI-compatible provider:
+
+```bash
+./agent --base-url https://api.example.com/v1 --model provider/model-name
 ```
 
 Stop with `Ctrl-C`.
