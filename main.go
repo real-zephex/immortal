@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"fmt"
 	"immortal/utils"
 	"os"
@@ -13,6 +14,12 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v3"
+)
+
+var (
+	flagBaseURL = flag.String("base-url", "https://openrouter.ai/api/v1", "LLM API base URL")
+	flagModel   = flag.String("model", "deepseek-v4-flash", "LLM model name")
+	flagClear   = flag.Bool("clear", false, "clear all conversation history")
 )
 
 var responses int = 0
@@ -120,6 +127,7 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event, db *
 }
 
 func main() {
+	flag.Parse()
 	start := time.Now()
 
 	fmt.Println("Initializing database...")
@@ -127,8 +135,15 @@ func main() {
 	defer db.Close()
 	fmt.Println("Database initialized.")
 
-	fmt.Println("Initializing OpenAI client...")
-	err := utils.InitOpenAIClient()
+	if *flagClear {
+		fmt.Println("Clearing all conversation history...")
+		utils.ClearConversations(db)
+		fmt.Println("Done.")
+		return
+	}
+
+	fmt.Printf("Initializing OpenAI client [model=%s, base-url=%s]...\n", *flagModel, *flagBaseURL)
+	err := utils.InitOpenAIClient(*flagBaseURL, *flagModel)
 	if err != nil {
 		fmt.Printf("Error initializing OpenAI client: %v\n", err)
 		return

@@ -70,9 +70,9 @@ var (
 )
 
 func getGroqKey() error {
-	key, exists := os.LookupEnv("GROQ_API_KEY")
+	key, exists := os.LookupEnv("IMMORTAL_API_KEY")
 	if !exists {
-		return fmt.Errorf("The API key is not set")
+		return fmt.Errorf("IMMORTAL_API_KEY environment variable not set")
 	}
 	API_KEY = key
 	return nil

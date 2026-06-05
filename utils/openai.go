@@ -11,29 +11,31 @@ import (
 )
 
 var openaiClient openai.Client
+var currentModel string
 
 const SubAgentSystemPrompt = `You are a sub-agent focused on completing the assigned task.
 You have access to bash tools. Respond concisely with only your findings.
 Do not ask follow-up questions or request additional tasks.`
 
-func GetGroqKey() (string, error) {
-	key, exists := os.LookupEnv("DEEPSEEK_API_KEY")
+func GetAPIKey() (string, error) {
+	key, exists := os.LookupEnv("IMMORTAL_API_KEY")
 	if !exists {
-		return "", fmt.Errorf("The API key is not set")
+		return "", fmt.Errorf("IMMORTAL_API_KEY environment variable not set")
 	}
 	return key, nil
 }
 
-func InitOpenAIClient() error {
-	key, err := GetGroqKey()
+func InitOpenAIClient(baseURL, model string) error {
+	key, err := GetAPIKey()
 	if err != nil {
 		return err
 	}
 	client := openai.NewClient(
 		option.WithAPIKey(key),
-		option.WithBaseURL("https://api.deepseek.com"),
+		option.WithBaseURL(baseURL),
 	)
 	openaiClient = client
+	currentModel = model
 	return nil
 }
 
@@ -97,6 +99,44 @@ var (
 		},
 	}
 
+	webSearchTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "web_search",
+				Description: openai.String("Search the web for information on a given topic"),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"topic": map[string]any{
+							"type":        "string",
+							"description": "The topic to search for",
+						},
+					},
+					"required": []string{"topic"},
+				},
+			},
+		},
+	}
+
+	urlFetchTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "url_fetch",
+				Description: openai.String("Fetch the content of a given URL"),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"url": map[string]any{
+							"type":        "string",
+							"description": "The URL to fetch",
+						},
+					},
+					"required": []string{"url"},
+				},
+			},
+		},
+	}
+
 	sendDocumentTool = openai.ChatCompletionToolUnionParam{
 		OfFunction: &openai.ChatCompletionFunctionToolParam{
 			Function: openai.FunctionDefinitionParam{
@@ -135,9 +175,9 @@ var (
 		},
 	}
 
-	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool}
-	subAgentTools     = []openai.ChatCompletionToolUnionParam{bashTool}
-	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool}
+	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool}
+	subAgentTools     = []openai.ChatCompletionToolUnionParam{bashTool, webSearchTool, urlFetchTool}
+	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool}
 )
 
 func OpenAIManager(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion) string {
@@ -156,8 +196,9 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 			ctx,
 			openai.ChatCompletionNewParams{
 				Messages: *localMessages,
-				Model:    "deepseek-v4-flash",
+				Model:    currentModel,
 				Tools:    tools,
+				
 			},
 		)
 		if err != nil {

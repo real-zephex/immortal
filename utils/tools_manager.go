@@ -4,15 +4,28 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"net/http"
+	"net/url"
+
 	"github.com/openai/openai-go/v3"
 )
 
-const maxOutputSize = 100 * 1024
+const (
+	maxOutputSize = 100 * 1024
+	WEB_BASE      = "https://s.jina.ai"
+	URL_BASE      = "https://r.jina.ai"
+)
+
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
 
 func ExecuteTool(toolName string, args map[string]any) (string, error) {
 	fmt.Printf(
@@ -27,9 +40,94 @@ func ExecuteTool(toolName string, args map[string]any) (string, error) {
 		return executeSendDocument(args)
 	case "send_image_over_telegram":
 		return executeSendImage(args)
+	case "web_search":
+		return webSearch(args)
+	case "url_fetch":
+		return urlSearch(args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
+}
+
+func getJinaKey() (string, error) {
+	key, exists := os.LookupEnv("JINA_API_KEY")
+	if !exists {
+		return "", fmt.Errorf("[ERROR] JINA_API_KEY not set")
+	}
+	return key, nil
+}
+
+func webSearch(args map[string]any) (string, error) {
+	topic, _ := args["topic"].(string)
+	if topic == "" {
+		return "", fmt.Errorf("[ERROR] Please provide a topic for the web search")
+	}
+
+	TOKEN, err := getJinaKey()
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to get Jina API key: %w", err)
+	}
+
+	parseUrl, err := url.Parse(WEB_BASE)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to parse web base URL: %w", err)
+	}
+
+	query := parseUrl.Query()
+	query.Set("q", topic)
+	parseUrl.RawQuery = query.Encode()
+
+	req, err := http.NewRequest("GET", parseUrl.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", TOKEN))
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to execute web search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to read response body: %w", err)
+	}
+
+	return string(body), nil
+}
+
+func urlSearch(args map[string]any) (string, error) {
+	url, _ := args["url"].(string)
+	if url == "" {
+		return "", fmt.Errorf("[ERROR] Please provide a URL for the search")
+	}
+
+	TOKEN, err := getJinaKey()
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to get Jina API key: %w", err)
+	}
+
+	finalUrl := fmt.Sprintf("%s/%s", URL_BASE, url)
+
+	req, err := http.NewRequest("GET", finalUrl, nil)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", TOKEN))
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to execute URL search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] Failed to read response body: %w", err)
+	}
+
+	return string(body), nil
 }
 
 func executeBash(args map[string]any) (string, error) {

@@ -80,3 +80,10 @@ func LoadConversation(db *sql.DB, channel string) []openai.ChatCompletionMessage
 func TelegramChannel(chatID int64) string {
 	return fmt.Sprintf("telegram:%d", chatID)
 }
+
+func ClearConversations(db *sql.DB) {
+	_, err := db.Exec("DELETE FROM conversations")
+	if err != nil {
+		log.Printf("Failed to clear conversations: %v", err)
+	}
+}

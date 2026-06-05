@@ -1,3 +1,5 @@
 .commandcode/
 ./agent
 *agent*
+messages.txt
+responses.txt
