@@ -1,2 +1,3 @@
-.commandcode
-agent
+.commandcode/
+./agent
+*agent*
