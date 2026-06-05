@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +45,8 @@ func ExecuteTool(toolName string, args map[string]any) (string, error) {
 		return webSearch(args)
 	case "url_fetch":
 		return urlSearch(args)
+	case "mail":
+		return executeMailHandler(args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -278,4 +281,21 @@ func executeSendImage(args map[string]any) (string, error) {
 	}
 
 	return fmt.Sprintf("Successfully sent image to Telegram: %s", filepath), nil
+}
+
+func executeMailHandler(args map[string]any) (string, error) {
+	req, err := parseMailRequest(args)
+	if err != nil {
+		return "", err
+	}
+
+	res := executeMail(req)
+	response := res.toToolResponse()
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal mail response: %v", err)
+	}
+
+	return string(data), nil
 }

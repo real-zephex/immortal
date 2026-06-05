@@ -137,6 +137,54 @@ var (
 		},
 	}
 
+	mailTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "mail",
+				Description: openai.String("Manage AgentMail inbox threads and messages: list threads, fetch a thread, send, reply, forward, or delete a thread."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{
+							"type":        "string",
+							"description": "Action to perform: get_threads, get_thread, send_email, reply_to_message, forward_message, delete_thread",
+							"enum":        []string{"get_threads", "get_thread", "send_email", "reply_to_message", "forward_message", "delete_thread"},
+						},
+						"thread_id": map[string]any{
+							"type":        "string",
+							"description": "Thread ID for get_thread or delete_thread",
+						},
+						"message_id": map[string]any{
+							"type":        "string",
+							"description": "Message ID for reply_to_message or forward_message",
+						},
+						"to": map[string]any{
+							"type":        "string",
+							"description": "Recipient email address",
+						},
+						"subject": map[string]any{
+							"type":        "string",
+							"description": "Subject for send_email",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "Plain text body",
+						},
+						"html": map[string]any{
+							"type":        "string",
+							"description": "HTML body. You must always include this whenever sending an email. Without this, email clients won't be able to see the contents of the email.",
+						},
+						"reply_to": map[string]any{
+							"type":        "string",
+							"description": "Reply-to message id for reply_to_message",
+						},
+					},
+					"required": []string{"action"},
+				},
+			},
+		},
+	}
+
 	sendDocumentTool = openai.ChatCompletionToolUnionParam{
 		OfFunction: &openai.ChatCompletionFunctionToolParam{
 			Function: openai.FunctionDefinitionParam{
@@ -175,9 +223,9 @@ var (
 		},
 	}
 
-	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool}
+	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool, mailTool}
 	subAgentTools     = []openai.ChatCompletionToolUnionParam{bashTool, webSearchTool, urlFetchTool}
-	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool}
+	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool, mailTool}
 )
 
 func OpenAIManager(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion) string {
