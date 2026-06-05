@@ -102,6 +102,7 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event, db *
 			params := utils.LoadConversation(db, "default")
 			if params == nil {
 				params = make([]openai.ChatCompletionMessageParamUnion, 0, 100)
+				params = append(params, openai.SystemMessage(utils.SystemPrompt))
 			}
 			params = append(params, openai.UserMessage(content))
 

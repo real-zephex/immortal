@@ -47,6 +47,12 @@ func ExecuteTool(toolName string, args map[string]any) (string, error) {
 		return urlSearch(args)
 	case "mail":
 		return executeMailHandler(args)
+	case "schedule_task":
+		return executeScheduleTask(args)
+	case "cancel_task":
+		return executeCancelTask(args)
+	case "list_scheduled_tasks":
+		return executeListTasks(args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -298,4 +304,51 @@ func executeMailHandler(args map[string]any) (string, error) {
 	}
 
 	return string(data), nil
+}
+
+func executeScheduleTask(args map[string]any) (string, error) {
+	task, _ := args["task"].(string)
+	intervalStr, _ := args["interval"].(string)
+	repeat, _ := args["repeat"].(bool)
+
+	if task == "" || intervalStr == "" {
+		return "", fmt.Errorf("task and interval are required")
+	}
+
+	interval, err := parseInterval(intervalStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid interval '%s': %v", intervalStr, err)
+	}
+
+	channelKey := TelegramChannel(CurrentTelegramChatID)
+	id := AddTask(channelKey, CurrentTelegramChatID, task, interval, repeat)
+	if id == "" {
+		return "", fmt.Errorf("scheduler not initialized")
+	}
+
+	repeatStr := "one-shot"
+	if repeat {
+		repeatStr = "repeating every " + interval.String()
+	}
+
+	return fmt.Sprintf("Task scheduled [%s]: %s (%s)", id, task, repeatStr), nil
+}
+
+func executeCancelTask(args map[string]any) (string, error) {
+	taskID, _ := args["task_id"].(string)
+	if taskID == "" {
+		return "", fmt.Errorf("task_id is required")
+	}
+
+	if err := CancelTask(taskID); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Task %s cancelled.", taskID), nil
+}
+
+func executeListTasks(args map[string]any) (string, error) {
+	channelKey := TelegramChannel(CurrentTelegramChatID)
+	tasks := ListTasks(channelKey)
+	return formatTaskList(tasks), nil
 }

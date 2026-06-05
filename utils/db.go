@@ -87,3 +87,10 @@ func ClearConversations(db *sql.DB) {
 		log.Printf("Failed to clear conversations: %v", err)
 	}
 }
+
+func ClearConversation(db *sql.DB, channel string) {
+	_, err := db.Exec("DELETE FROM conversations WHERE channel = ?", channel)
+	if err != nil {
+		log.Printf("Failed to clear conversation %s: %v", channel, err)
+	}
+}

@@ -82,7 +82,157 @@ func StartTelegramBot(ctx context.Context, db *sql.DB) {
 		return
 	}
 
-	botConfig(ctx, db)
+	telegramEventCh := make(chan TelegramEvent, 100)
+	InitScheduler(telegramEventCh)
+
+	go telegramProducer(ctx, db, telegramEventCh)
+	go telegramConsumer(ctx, db, telegramEventCh)
+}
+
+func telegramProducer(ctx context.Context, db *sql.DB, eventCh chan<- TelegramEvent) {
+	_, err := telegramBotKeyCheck()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	updateConfig := bot.NewUpdate(0)
+	updateConfig.Timeout = 30
+	updates := telegramBot.GetUpdatesChan(updateConfig)
+
+	fmt.Println("Listening for Telegram events...")
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Telegram bot shutting down...")
+			return
+		case update, ok := <-updates:
+			if !ok {
+				return
+			}
+
+			message := update.Message
+			if message == nil {
+				continue
+			}
+
+			// Commands handled directly, no LLM
+			if message.IsCommand() {
+				commandsHandler(message, db)
+				continue
+			}
+
+			channel := TelegramChannel(message.Chat.ID)
+			receivedMessage := strings.TrimSpace(message.Text)
+
+			// STT: voice messages -> Groq Whisper
+			if message.Voice != nil {
+				fmt.Println("Voice message detected. Transcribing...")
+				text, err := handleAudio(message.Voice.FileID)
+				if err != nil {
+					sendMessage(fmt.Sprintf("Error transcribing audio: %v", err), message)
+					continue
+				}
+				receivedMessage = text
+				fmt.Printf("Transcribed: %s\n", text)
+			}
+
+			// Reply-to context
+			if message.ReplyToMessage != nil {
+				replyText := strings.TrimSpace(message.ReplyToMessage.Text)
+				if replyText != "" {
+					if receivedMessage != "" {
+						receivedMessage = fmt.Sprintf(
+							"Reply context:\n%s\n\nUser message:\n%s",
+							replyText, receivedMessage,
+						)
+					} else {
+						receivedMessage = fmt.Sprintf("Reply context:\n%s", replyText)
+					}
+				}
+			}
+
+			if receivedMessage == "" {
+				continue
+			}
+
+			fmt.Printf("[TG] %d: %.120s\n", message.Chat.ID, receivedMessage)
+
+			eventCh <- TelegramEvent{
+				Type:    TelegramUserMessage,
+				ChatID:  message.Chat.ID,
+				Channel: channel,
+				Payload: receivedMessage,
+			}
+		}
+	}
+}
+
+func telegramConsumer(ctx context.Context, db *sql.DB, eventCh <-chan TelegramEvent) {
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Telegram consumer shutting down...")
+			return
+		case event, ok := <-eventCh:
+			if !ok {
+				return
+			}
+
+			CurrentTelegramChatID = event.ChatID
+
+			params := LoadConversation(db, event.Channel)
+			if params == nil {
+				params = make([]openai.ChatCompletionMessageParamUnion, 0, 100)
+				params = append(params, openai.SystemMessage(SystemPrompt))
+			}
+
+			var snap []openai.ChatCompletionMessageParamUnion
+			ephemeral := event.Type == TelegramScheduledTask
+
+			if ephemeral {
+				snap = make([]openai.ChatCompletionMessageParamUnion, len(params))
+				copy(snap, params)
+				snap = append(snap, openai.UserMessage("⏰ " + event.Payload))
+			} else {
+				params = append(params, openai.UserMessage(event.Payload))
+			}
+
+			messages := &params
+			if ephemeral {
+				messages = &snap
+			}
+
+			response := OpenAIManagerWithTools(ctx, messages, TelegramTools)
+			if response == "" {
+				response = "I'm sorry, I couldn't process that request."
+			}
+
+			sendMessageToChatID(response, event.ChatID)
+			fmt.Printf("[TG] Response sent to %d (%s)\n", event.ChatID, event.Type)
+
+			if !ephemeral {
+				SaveConversation(db, event.Channel, params)
+			}
+		}
+	}
+}
+
+func sendMessageToChatID(text string, chatID int64) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	chunks := splitTelegramMessage(text, telegramMaxMessageLen)
+	for _, chunk := range chunks {
+		html := mdToTelegramHTML(chunk)
+		msg := bot.NewMessage(chatID, html)
+		msg.ParseMode = "HTML"
+		if _, err := telegramBot.Send(msg); err != nil {
+			fmt.Printf("Error sending Telegram message: %v\n", err)
+			return
+		}
+	}
 }
 
 // splitTelegramMessage splits a message into chunks respecting Unicode rune boundaries.
@@ -143,13 +293,17 @@ func sendMessage(text string, message *bot.Message) {
 	}
 }
 
-// commandsHandler processes Telegram bot commands (/start, /help).
-func commandsHandler(message *bot.Message) {
+// commandsHandler processes Telegram bot commands (/start, /help, /clear).
+func commandsHandler(message *bot.Message, db *sql.DB) {
 	switch message.Command() {
 	case "start":
 		sendMessage("👋 Welcome to Immortal Agent!\nUse /help to see available commands.", message)
 	case "help":
-		sendMessage("📋 *Available Commands*\n\n/start - Show welcome message\n/help - Show this help menu", message)
+		sendMessage("📋 *Available Commands*\n\n/start - Show welcome message\n/help - Show this help menu\n/clear - Clear conversation history for this chat", message)
+	case "clear":
+		channel := TelegramChannel(message.Chat.ID)
+		ClearConversation(db, channel)
+		sendMessage("✅ Conversation history cleared for this chat.", message)
 	default:
 		sendMessage(fmt.Sprintf("Unknown command: %s", message.Command()), message)
 	}
@@ -268,98 +422,4 @@ func sendImage(chatID int64, filepath string) error {
 	return nil
 }
 
-// botConfig is the main polling loop for Telegram updates.
-func botConfig(ctx context.Context, db *sql.DB) {
-	_, err := telegramBotKeyCheck()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
 
-	updateConfig := bot.NewUpdate(0)
-	updateConfig.Timeout = 30
-	updates := telegramBot.GetUpdatesChan(updateConfig)
-
-	fmt.Println("Listening for Telegram events...")
-
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Println("Telegram bot shutting down...")
-			return
-		case update, ok := <-updates:
-			if !ok {
-				return
-			}
-
-			message := update.Message
-			if message == nil {
-				continue
-			}
-
-			// Commands
-			if message.IsCommand() {
-				commandsHandler(message)
-				continue
-			}
-
-			channel := TelegramChannel(message.Chat.ID)
-			receivedMessage := strings.TrimSpace(message.Text)
-
-			// STT: voice messages → Groq Whisper
-			if message.Voice != nil {
-				fmt.Println("Voice message detected. Transcribing...")
-				text, err := handleAudio(message.Voice.FileID)
-				if err != nil {
-					sendMessage(fmt.Sprintf("Error transcribing audio: %v", err), message)
-					continue
-				}
-				receivedMessage = text
-				fmt.Printf("Transcribed: %s\n", text)
-			}
-
-			// Reply-to context
-			if message.ReplyToMessage != nil {
-				replyText := strings.TrimSpace(message.ReplyToMessage.Text)
-				if replyText != "" {
-					if receivedMessage != "" {
-						receivedMessage = fmt.Sprintf(
-							"Reply context:\n%s\n\nUser message:\n%s",
-							replyText, receivedMessage,
-						)
-					} else {
-						receivedMessage = fmt.Sprintf("Reply context:\n%s", replyText)
-					}
-				}
-			}
-
-			if receivedMessage == "" {
-				continue
-			}
-
-			fmt.Printf("[TG] %d: %.120s\n", message.Chat.ID, receivedMessage)
-			// Load history for this Telegram channel
-			params := LoadConversation(db, channel)
-			if params == nil {
-				params = make([]openai.ChatCompletionMessageParamUnion, 0, 100)
-			}
-			params = append(params, openai.UserMessage(receivedMessage))
-
-			// Set current chat ID for media-sending tools
-			CurrentTelegramChatID = message.Chat.ID
-
-			// Run agent with Telegram tools
-			response := OpenAIManagerWithTools(ctx, &params, TelegramTools)
-			if response == "" {
-				response = "I'm sorry, I couldn't process that request."
-			}
-
-			// Send response back to Telegram
-			sendMessage(response, message)
-			fmt.Printf("[TG] Response sent to %d\n", message.Chat.ID)
-
-			// Persist
-			SaveConversation(db, channel, params)
-		}
-	}
-}

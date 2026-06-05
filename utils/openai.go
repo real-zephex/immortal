@@ -13,6 +13,31 @@ import (
 var openaiClient openai.Client
 var currentModel string
 
+const SystemPrompt = `You are an autonomous agent operating in a persistent Go runtime. You have access to the following tools and capabilities.
+
+Core tools available across all contexts:
+- bash_tool: Run bash commands (30s timeout, 100KB output cap). Include a reason for every command.
+- spawn_agents: Spawn multiple sub-agents to work on sub-tasks in parallel. Each sub-agent gets a fresh conversation with bash, web search, and URL fetch tools. Responses from all sub-agents are returned together.
+- web_search: Search the web for information on a given topic (backed by Jina).
+- url_fetch: Fetch and read the content of a given URL (backed by Jina Reader).
+- mail: Manage AgentMail inbox — list threads, fetch a thread, send email, reply to a message, forward a message, or delete a thread.
+
+Telegram-specific tools (only available when communicating over Telegram):
+- schedule_task: Schedule a one-shot or repeating task. The task will fire after the specified interval (e.g. "10m", "1h", "daily", "hourly", "weekly") and be presented to you as a new user message prefixed with "⏰". For non-repeating tasks, supply repeat: false; for repeating, supply repeat: true.
+- cancel_task: Cancel a previously scheduled task by its task ID.
+- list_scheduled_tasks: List all currently scheduled tasks for this chat.
+- send_document_over_telegram: Send a file as a document back to the Telegram chat.
+- send_image_over_telegram: Send an image file back to the Telegram chat.
+
+Behavior and constraints:
+- Your conversation history is persisted in SQLite and restored on restart. Treat it as continuous across sessions.
+- When a scheduled task fires, you see it as "⏰ <task description>". Process it like any user request, but the response and tool calls from scheduled runs are ephemeral — they are not saved to conversation history.
+- When replying, your response goes back to the user through the same channel (file output or Telegram chat).
+- Files you create are written to the working directory on the server.
+- You can create files with bash (e.g. echo, cat, python) and then send them over Telegram if requested.
+- You do not have internet access except through web_search and url_fetch tools.
+- Keep responses concise and direct. Use sub-agents for parallelizable work.`
+
 const SubAgentSystemPrompt = `You are a sub-agent focused on completing the assigned task.
 You have access to bash tools. Respond concisely with only your findings.
 Do not ask follow-up questions or request additional tasks.`
@@ -223,9 +248,78 @@ var (
 		},
 	}
 
+	scheduleTaskTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "schedule_task",
+				Description: openai.String("Schedule a task to run after a given interval. The task will be executed and the result sent to this chat."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"task": map[string]any{
+							"type":        "string",
+							"description": "The task description that will be executed when the timer fires",
+						},
+						"interval": map[string]any{
+							"type":        "string",
+							"description": "Time interval (e.g. '10m', '1h', 'daily', 'hourly', 'weekly')",
+						},
+						"repeat": map[string]any{
+							"type":        "boolean",
+							"description": "Whether the task should repeat after each interval",
+						},
+						"reason": map[string]any{
+							"type":        "string",
+							"description": "Why you are scheduling this task",
+						},
+					},
+					"required": []string{"task", "interval", "repeat"},
+				},
+			},
+		},
+	}
+
+	cancelTaskTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "cancel_task",
+				Description: openai.String("Cancel a previously scheduled task by its task ID."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"task_id": map[string]any{
+							"type":        "string",
+							"description": "The ID of the task to cancel (e.g. 'task_1')",
+						},
+					},
+					"required": []string{"task_id"},
+				},
+			},
+		},
+	}
+
+	listTasksTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "list_scheduled_tasks",
+				Description: openai.String("List all currently scheduled tasks for this chat."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"reason": map[string]any{
+							"type":        "string",
+							"description": "Why you are listing tasks",
+						},
+					},
+					"required": []string{},
+				},
+			},
+		},
+	}
+
 	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool, mailTool}
 	subAgentTools     = []openai.ChatCompletionToolUnionParam{bashTool, webSearchTool, urlFetchTool}
-	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool, mailTool}
+	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool, mailTool, scheduleTaskTool, cancelTaskTool, listTasksTool}
 )
 
 func OpenAIManager(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion) string {
@@ -246,7 +340,6 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 				Messages: *localMessages,
 				Model:    currentModel,
 				Tools:    tools,
-				
 			},
 		)
 		if err != nil {
