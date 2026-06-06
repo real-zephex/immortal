@@ -198,15 +198,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 	}
 
-	m.textinput, cmd = m.textinput.Update(msg)
-	cmds = append(cmds, cmd)
-
-	// Only forward non-keyboard messages to viewport (mouse wheel scrolling, etc.)
-	// to prevent j/k vim scroll keys from interfering with text input.
-	switch msg.(type) {
+	// Don't forward mouse events to textinput — mouse wheel and clicks
+	// can leak random characters into the input field.
+	// Only textinput and viewport handle their own relevant messages.
+	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Skip — textinput handles all keyboard input
+		m.textinput, cmd = m.textinput.Update(msg)
+		cmds = append(cmds, cmd)
+		// KeyMsg already handled above for scroll keys, history, etc.
+		// Don't forward KeyMsg to viewport to prevent j/k scroll interference.
+	case tea.MouseMsg:
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
 	default:
+		m.textinput, cmd = m.textinput.Update(msg)
+		cmds = append(cmds, cmd)
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	}

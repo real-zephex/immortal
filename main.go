@@ -114,15 +114,9 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 				params = append(params, openai.UserMessage(content))
 			}
 
-			if utils.ThinkingHook != nil {
-				utils.ThinkingHook(true, "thinking...")
-			}
 			response := utils.OpenAIManager(ctx, &params)
-			if utils.ThinkingHook != nil {
-				utils.ThinkingHook(false, "")
-			}
 
-			if response != "" {
+		if response != "" {
 				responses++
 				currentCount := responses
 				timestamp := time.Now().Format("2006-01-02 15:04:05")
@@ -139,15 +133,16 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 				if !isScheduled {
 					utils.SaveConversation(db, "default", params)
 				}
+			}
 
-				// Send response to TUI if active
-				if responseCh != nil {
-					select {
-					case responseCh <- response:
-					case <-ctx.Done():
-						return
-					default:
-					}
+			// Always signal completion to TUI so thinking indicator clears,
+			// even on empty response (error/empty cases).
+			if responseCh != nil {
+				select {
+				case responseCh <- response:
+				case <-ctx.Done():
+					return
+				default:
 				}
 			}
 		}
