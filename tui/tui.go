@@ -162,6 +162,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = true
 			m.statusText = "processing..."
 			return m, nil
+		default:
+			m.textinput, cmd = m.textinput.Update(msg)
+			cmds = append(cmds, cmd)
 		}
 
 	case responseMsg:
@@ -193,26 +196,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		footerHeight := 3
 		m.viewport.Width = msg.Width - 4
 		m.viewport.Height = msg.Height - headerHeight - footerHeight - 2
-		m.textinput.Width = msg.Width - promptWidth()
+		promptPrefix := PromptStyle.Render("immortal ❯") + " "
+		m.textinput.Width = max(1, msg.Width-lipgloss.Width(promptPrefix))
 		m.viewport.SetContent(m.renderContent())
 		m.viewport.GotoBottom()
 	}
 
-	// Don't forward mouse events to textinput — mouse wheel and clicks
-	// can leak random characters into the input field.
-	// Only textinput and viewport handle their own relevant messages.
+	// Mouse events go only to the viewport. KeyMsg events are handled entirely
+	// in the KeyMsg branch above. Never forward unknown messages to textinput
+	// — they can leak mouse/terminal escape sequences into the input field.
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		m.textinput, cmd = m.textinput.Update(msg)
-		cmds = append(cmds, cmd)
-		// KeyMsg already handled above for scroll keys, history, etc.
-		// Don't forward KeyMsg to viewport to prevent j/k scroll interference.
 	case tea.MouseMsg:
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	default:
-		m.textinput, cmd = m.textinput.Update(msg)
-		cmds = append(cmds, cmd)
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	}
@@ -261,6 +258,7 @@ func RunTUI(ctx context.Context, db *sql.DB, eventsCh chan<- utils.Event, respon
 
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question..."
+	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 2048
 
@@ -269,7 +267,8 @@ func RunTUI(ctx context.Context, db *sql.DB, eventsCh chan<- utils.Event, respon
 	if err != nil || termWidth < 40 {
 		termWidth = 80
 	}
-	ti.Width = termWidth - promptWidth()
+	promptPrefix := PromptStyle.Render("immortal ❯") + " "
+	ti.Width = max(1, termWidth-lipgloss.Width(promptPrefix))
 
 	vp := viewport.New(termWidth-4, 20)
 
@@ -440,6 +439,4 @@ func getTermSize() (int, int, error) {
 	return term.GetSize(int(os.Stdin.Fd()))
 }
 
-func promptWidth() int {
-	return lipgloss.Width(PromptStyle.Render("immortal ❯")) + 1
-}
+
