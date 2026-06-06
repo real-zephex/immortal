@@ -33,14 +33,14 @@ type ScheduledTask struct {
 }
 
 type scheduler struct {
-	mu       sync.Mutex
-	tasks    map[string]*ScheduledTask
-	counter  int
-	eventCh  chan TelegramEvent
+	mu      sync.Mutex
+	tasks   map[string]*ScheduledTask
+	counter int
+	eventCh chan TelegramEvent
 }
 
 var sched = &scheduler{
-	tasks:   make(map[string]*ScheduledTask),
+	tasks: make(map[string]*ScheduledTask),
 }
 
 func InitScheduler(eventCh chan TelegramEvent) {
@@ -165,7 +165,7 @@ func formatTaskList(tasks []ScheduledTask) string {
 		if t.Repeat {
 			repeat = "repeating"
 		}
-		b.WriteString(fmt.Sprintf("- [%s] %s (every %s, %s)\n", t.ID, t.Task, t.Interval, repeat))
+		fmt.Fprintf(&b, "- [%s] %s (every %s, %s)\n", t.ID, t.Task, t.Interval, repeat)
 	}
 	return b.String()
 }

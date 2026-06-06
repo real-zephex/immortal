@@ -347,7 +347,7 @@ func executeCancelTask(args map[string]any) (string, error) {
 	return fmt.Sprintf("Task %s cancelled.", taskID), nil
 }
 
-func executeListTasks(args map[string]any) (string, error) {
+func executeListTasks(_ map[string]any) (string, error) {
 	channelKey := TelegramChannel(CurrentTelegramChatID)
 	tasks := ListTasks(channelKey)
 	return formatTaskList(tasks), nil
