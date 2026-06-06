@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"immortal/tui"
 	"immortal/utils"
 	"os"
 	"os/signal"
@@ -14,26 +15,19 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v3"
+	"golang.org/x/term"
 )
 
 var (
 	flagBaseURL = flag.String("base-url", "https://openrouter.ai/api/v1", "LLM API base URL")
 	flagModel   = flag.String("model", "deepseek-v4-flash", "LLM model name")
 	flagClear   = flag.Bool("clear", false, "clear all conversation history")
+	flagTUI     = flag.Bool("tui", false, "force TUI mode")
+	flagNoTUI   = flag.Bool("no-tui", false, "disable TUI mode (headless)")
+	flagNoTG    = flag.Bool("no-tg", false, "disable Telegram bot")
 )
 
 var responses int = 0
-
-type EventType string
-
-const (
-	EventTypeUserMessage EventType = "user_message"
-)
-
-type Event struct {
-	Type    EventType `json:"event"`
-	Payload any
-}
 
 func GetTasksFromFile() []string {
 	data, err := os.ReadFile("messages.txt")
@@ -43,7 +37,7 @@ func GetTasksFromFile() []string {
 	return strings.Split(string(data), "\n")
 }
 
-func PushToChannelA(ctx context.Context, events chan<- Event, wg *sync.WaitGroup) {
+func PushToChannelA(ctx context.Context, events chan<- utils.Event, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		select {
@@ -58,7 +52,7 @@ func PushToChannelA(ctx context.Context, events chan<- Event, wg *sync.WaitGroup
 						continue
 					}
 					select {
-					case events <- Event{Type: EventTypeUserMessage, Payload: task}:
+					case events <- utils.Event{Type: utils.EventTypeUserMessage, Payload: task}:
 					case <-ctx.Done():
 						return
 					}
@@ -69,7 +63,7 @@ func PushToChannelA(ctx context.Context, events chan<- Event, wg *sync.WaitGroup
 	}
 }
 
-func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event, db *sql.DB) {
+func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event, db *sql.DB, responseCh chan<- string) {
 	defer wg.Done()
 
 	f, err := os.OpenFile("responses.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -98,15 +92,36 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event, db *
 				continue
 			}
 
+			// Detect scheduled task firings (⏰ prefix) — log them but
+			// don't persist to conversation history (ephemeral).
+			isScheduled := strings.HasPrefix(content, "⏰ ")
+
 			// Load full conversation from DB
 			params := utils.LoadConversation(db, "default")
 			if params == nil {
 				params = make([]openai.ChatCompletionMessageParamUnion, 0, 100)
 				params = append(params, openai.SystemMessage(utils.SystemPrompt))
 			}
-			params = append(params, openai.UserMessage(content))
 
+			// For scheduled tasks, snapshot history instead of mutating it
+			var snap []openai.ChatCompletionMessageParamUnion
+			if isScheduled {
+				snap = make([]openai.ChatCompletionMessageParamUnion, len(params))
+				copy(snap, params)
+				snap = append(snap, openai.UserMessage(content))
+				params = snap
+			} else {
+				params = append(params, openai.UserMessage(content))
+			}
+
+			if utils.ThinkingHook != nil {
+				utils.ThinkingHook(true, "thinking...")
+			}
 			response := utils.OpenAIManager(ctx, &params)
+			if utils.ThinkingHook != nil {
+				utils.ThinkingHook(false, "")
+			}
+
 			if response != "" {
 				responses++
 				currentCount := responses
@@ -120,8 +135,20 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan Event, db *
 
 				fmt.Printf("Processed task: %s (Total: %d)\n", content, currentCount)
 
-				// Persist full conversation (preserves tool calls + results)
-				utils.SaveConversation(db, "default", params)
+				// Persist full conversation — skip for scheduled task firings
+				if !isScheduled {
+					utils.SaveConversation(db, "default", params)
+				}
+
+				// Send response to TUI if active
+				if responseCh != nil {
+					select {
+					case responseCh <- response:
+					case <-ctx.Done():
+						return
+					default:
+					}
+				}
 			}
 		}
 	}
@@ -164,20 +191,39 @@ func main() {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	eventsChannels := make(chan Event, 100)
+	eventsChannels := make(chan utils.Event, 100)
+	responseCh := make(chan string, 100)
+	utils.InitLocalScheduler(eventsChannels)
 
 	go PushToChannelA(ctx, eventsChannels, &wg)
 
-	go runAgent(&wg, ctx, eventsChannels, db)
+	go runAgent(&wg, ctx, eventsChannels, db, responseCh)
 
-	// Auto-start Telegram bot if TELEGRAM_BOT_TOKEN is set
-	if os.Getenv("TELEGRAM_BOT_TOKEN") != "" {
+	// Auto-start Telegram bot if TELEGRAM_BOT_TOKEN is set and not disabled
+	if os.Getenv("TELEGRAM_BOT_TOKEN") != "" && !*flagNoTG {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			utils.StartTelegramBot(ctx, db)
 		}()
 		fmt.Println("Telegram bot goroutine started.")
+	}
+
+	// Start TUI if appropriate
+	useTUI := false
+	if *flagTUI {
+		useTUI = true
+	} else if !*flagNoTUI && term.IsTerminal(int(os.Stdin.Fd())) {
+		useTUI = true
+	}
+
+	if useTUI {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tui.RunTUI(ctx, db, eventsChannels, responseCh)
+		}()
+		fmt.Println("TUI started.")
 	}
 
 	wg.Wait()

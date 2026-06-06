@@ -317,7 +317,76 @@ var (
 		},
 	}
 
-	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool, mailTool}
+	localScheduleTaskTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "local_schedule_task",
+				Description: openai.String("Schedule a task to run after a given interval. The task will run in the background and the result will appear as a new user message. Use this for one-shot reminders or recurring checks."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"task": map[string]any{
+							"type":        "string",
+							"description": "The task description that will be executed when the timer fires",
+						},
+						"interval": map[string]any{
+							"type":        "string",
+							"description": "Time interval (e.g. '10m', '1h', 'daily', 'hourly', 'weekly')",
+						},
+						"repeat": map[string]any{
+							"type":        "boolean",
+							"description": "Whether the task should repeat after each interval",
+						},
+						"reason": map[string]any{
+							"type":        "string",
+							"description": "Why you are scheduling this task",
+						},
+					},
+					"required": []string{"task", "interval", "repeat"},
+				},
+			},
+		},
+	}
+
+	localCancelTaskTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "local_cancel_task",
+				Description: openai.String("Cancel a previously scheduled local task by its task ID."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"task_id": map[string]any{
+							"type":        "string",
+							"description": "The ID of the task to cancel (e.g. 'task_1')",
+						},
+					},
+					"required": []string{"task_id"},
+				},
+			},
+		},
+	}
+
+	localListTasksTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "local_list_scheduled_tasks",
+				Description: openai.String("List all currently scheduled local tasks."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"reason": map[string]any{
+							"type":        "string",
+							"description": "Why you are listing tasks",
+						},
+					},
+					"required": []string{},
+				},
+			},
+		},
+	}
+
+	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool, mailTool, localScheduleTaskTool, localCancelTaskTool, localListTasksTool}
 	subAgentTools     = []openai.ChatCompletionToolUnionParam{bashTool, webSearchTool, urlFetchTool}
 	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool, mailTool, scheduleTaskTool, cancelTaskTool, listTasksTool}
 )
@@ -337,13 +406,14 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 		chatCompletion, err := openaiClient.Chat.Completions.New(
 			ctx,
 			openai.ChatCompletionNewParams{
-				Messages: *localMessages,
-				Model:    currentModel,
-				Tools:    tools,
+				Messages:          *localMessages,
+				Model:             currentModel,
+				Tools:             tools,
+				ParallelToolCalls: openai.Bool(true),
 			},
 		)
 		if err != nil {
-			fmt.Println("[ERROR]", err)
+			DebugPrint("[ERROR] %v\n", err)
 			return ""
 		}
 
@@ -356,13 +426,17 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 			return chatCompletion.Choices[0].Message.Content
 		}
 
-		fmt.Println("===Tool Calls===")
+		DebugPrint("===Tool Calls===\n")
 		for _, tool := range toolCalls {
+			if PrintHook != nil {
+				PrintHook(fmt.Sprintf("🔧 Tool: %s\n", tool.Function.Name))
+			}
+
 			var toolArguments map[string]any
 
 			err := json.Unmarshal([]byte(tool.Function.Arguments), &toolArguments)
 			if err != nil {
-				fmt.Println("[ERROR] parsing arguments:", err)
+				DebugPrint("[ERROR] parsing arguments: %v\n", err)
 				continue
 			}
 

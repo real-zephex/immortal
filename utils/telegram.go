@@ -128,14 +128,14 @@ func telegramProducer(ctx context.Context, db *sql.DB, eventCh chan<- TelegramEv
 
 			// STT: voice messages -> Groq Whisper
 			if message.Voice != nil {
-				fmt.Println("Voice message detected. Transcribing...")
+				DebugPrint("Voice message detected. Transcribing...\n")
 				text, err := handleAudio(message.Voice.FileID)
 				if err != nil {
 					sendMessage(fmt.Sprintf("Error transcribing audio: %v", err), message)
 					continue
 				}
 				receivedMessage = text
-				fmt.Printf("Transcribed: %s\n", text)
+				DebugPrint("Transcribed: %s\n", text)
 			}
 
 			// Reply-to context
@@ -157,7 +157,7 @@ func telegramProducer(ctx context.Context, db *sql.DB, eventCh chan<- TelegramEv
 				continue
 			}
 
-			fmt.Printf("[TG] %d: %.120s\n", message.Chat.ID, receivedMessage)
+			DebugPrint("[TG] %d: %.120s\n", message.Chat.ID, receivedMessage)
 
 			eventCh <- TelegramEvent{
 				Type:    TelegramUserMessage,
@@ -173,7 +173,7 @@ func telegramConsumer(ctx context.Context, db *sql.DB, eventCh <-chan TelegramEv
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("Telegram consumer shutting down...")
+			DebugPrint("Telegram consumer shutting down...\n")
 			return
 		case event, ok := <-eventCh:
 			if !ok {
@@ -210,7 +210,7 @@ func telegramConsumer(ctx context.Context, db *sql.DB, eventCh <-chan TelegramEv
 			}
 
 			sendMessageToChatID(response, event.ChatID)
-			fmt.Printf("[TG] Response sent to %d (%s)\n", event.ChatID, event.Type)
+			DebugPrint("[TG] Response sent to %d (%s)\n", event.ChatID, event.Type)
 
 			if !ephemeral {
 				SaveConversation(db, event.Channel, params)
@@ -229,7 +229,7 @@ func sendMessageToChatID(text string, chatID int64) {
 		msg := bot.NewMessage(chatID, html)
 		msg.ParseMode = "HTML"
 		if _, err := telegramBot.Send(msg); err != nil {
-			fmt.Printf("Error sending Telegram message: %v\n", err)
+			DebugPrint("Error sending Telegram message: %v\n", err)
 			return
 		}
 	}
@@ -287,7 +287,7 @@ func sendMessage(text string, message *bot.Message) {
 		}
 
 		if _, err := telegramBot.Send(msg); err != nil {
-			fmt.Printf("Error sending Telegram message: %v\n", err)
+			DebugPrint("Error sending Telegram message: %v\n", err)
 			return
 		}
 	}

@@ -29,7 +29,7 @@ var httpClient = &http.Client{
 }
 
 func ExecuteTool(toolName string, args map[string]any) (string, error) {
-	fmt.Printf(
+	DebugPrint(
 		"Executing tool: %s with args: %v\n", toolName, args,
 	)
 	switch toolName {
@@ -53,6 +53,12 @@ func ExecuteTool(toolName string, args map[string]any) (string, error) {
 		return executeCancelTask(args)
 	case "list_scheduled_tasks":
 		return executeListTasks(args)
+	case "local_schedule_task":
+		return executeLocalScheduleTask(args)
+	case "local_cancel_task":
+		return executeLocalCancelTask(args)
+	case "local_list_scheduled_tasks":
+		return executeLocalListTasks(args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -216,14 +222,14 @@ func executeSpawnAgents(args map[string]any) (string, error) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	fmt.Printf("[spawn_agents] launching %d sub-agents\n", len(tasks))
+	DebugPrint("[spawn_agents] launching %d sub-agents\n", len(tasks))
 
 	for _, t := range tasks {
 		wg.Add(1)
 		go func(t subAgentTask) {
 			defer wg.Done()
 
-			fmt.Printf("[spawn_agents] agent %d starting: %s\n", t.ID, t.Task)
+			DebugPrint("[spawn_agents] agent %d starting: %s\n", t.ID, t.Task)
 
 			subMessages := []openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(SubAgentSystemPrompt),
@@ -235,10 +241,10 @@ func executeSpawnAgents(args map[string]any) (string, error) {
 			mu.Lock()
 			if output == "" {
 				results[t.ID] = fmt.Sprintf("[Agent %d FAILED]: sub-agent returned empty response", t.ID)
-				fmt.Printf("[spawn_agents] agent %d finished: FAILED (empty response)\n", t.ID)
+				DebugPrint("[spawn_agents] agent %d finished: FAILED (empty response)\n", t.ID)
 			} else {
 				results[t.ID] = fmt.Sprintf("[Agent %d]: %s", t.ID, output)
-				fmt.Printf("[spawn_agents] agent %d finished: OK (%d chars)\n", t.ID, len(output))
+				DebugPrint("[spawn_agents] agent %d finished: OK (%d chars)\n", t.ID, len(output))
 			}
 			mu.Unlock()
 		}(t)
@@ -246,7 +252,7 @@ func executeSpawnAgents(args map[string]any) (string, error) {
 
 	wg.Wait()
 
-	fmt.Printf("[spawn_agents] all %d sub-agents completed\n", len(tasks))
+	DebugPrint("[spawn_agents] all %d sub-agents completed\n", len(tasks))
 
 	out := make([]string, 0, len(tasks))
 	for _, t := range tasks {
@@ -351,4 +357,49 @@ func executeListTasks(_ map[string]any) (string, error) {
 	channelKey := TelegramChannel(CurrentTelegramChatID)
 	tasks := ListTasks(channelKey)
 	return formatTaskList(tasks), nil
+}
+
+func executeLocalScheduleTask(args map[string]any) (string, error) {
+	task, _ := args["task"].(string)
+	intervalStr, _ := args["interval"].(string)
+	repeat, _ := args["repeat"].(bool)
+
+	if task == "" || intervalStr == "" {
+		return "", fmt.Errorf("task and interval are required")
+	}
+
+	interval, err := parseInterval(intervalStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid interval '%s': %v", intervalStr, err)
+	}
+
+	id := AddLocalTask(task, interval, repeat)
+	if id == "" {
+		return "", fmt.Errorf("local scheduler not initialized")
+	}
+
+	repeatStr := "one-shot"
+	if repeat {
+		repeatStr = "repeating every " + interval.String()
+	}
+
+	return fmt.Sprintf("Task scheduled [%s]: %s (%s)", id, task, repeatStr), nil
+}
+
+func executeLocalCancelTask(args map[string]any) (string, error) {
+	taskID, _ := args["task_id"].(string)
+	if taskID == "" {
+		return "", fmt.Errorf("task_id is required")
+	}
+
+	if err := CancelLocalTask(taskID); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Task %s cancelled.", taskID), nil
+}
+
+func executeLocalListTasks(_ map[string]any) (string, error) {
+	tasks := ListLocalTasks()
+	return formatLocalTaskList(tasks), nil
 }
