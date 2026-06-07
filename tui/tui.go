@@ -10,6 +10,7 @@ import (
 
 	"immortal/utils"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,10 +20,7 @@ import (
 )
 
 type responseMsg string
-type thinkingMsg struct {
-	thinking bool
-	status   string
-}
+type statusMsg string
 type logMsg string
 
 type tuiModel struct {
@@ -32,11 +30,12 @@ type tuiModel struct {
 	eventsCh   chan<- utils.Event
 	responseCh <-chan string
 
-	viewport   viewport.Model
-	textinput  textinput.Model
-	messages   []string
-	width      int
-	height     int
+	viewport  viewport.Model
+	textinput textinput.Model
+	spinner   spinner.Model
+	messages  []string
+	width     int
+	height    int
 
 	thinking   bool
 	statusText string
@@ -45,17 +44,20 @@ type tuiModel struct {
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, m.spinner.Tick, waitForResponse(m.ctx, m.responseCh))
 }
 
 func (m tuiModel) headerView() string {
-	title := HeaderStyle.Render("immortal • interactive")
-	meta := SubtleStyle.Render("commands: /help for slash commands")
-	bar := SubtleStyle.Render(strings.Repeat("─", m.width))
-	if len(bar) > 0 {
-		return title + "\n" + meta + "\n" + bar
+	title := HeaderStyle.Render(" 🤖 IMMORTAL AGENT ")
+	meta := SubtleStyle.Render(" /help | /clear | pgup/pgdn ")
+	
+	barWidth := m.width - lipgloss.Width(title) - lipgloss.Width(meta) - 2
+	if barWidth < 0 {
+		barWidth = 0
 	}
-	return title + "\n" + meta
+	bar := SubtleStyle.Render(strings.Repeat("─", barWidth))
+	
+	return lipgloss.JoinHorizontal(lipgloss.Center, title, " ", meta, " ", bar)
 }
 
 func (m tuiModel) renderContent() string {
@@ -107,7 +109,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.textinput.SetValue("")
 
-			wrapLimit := m.viewport.Width - 4
+			wrapLimit := m.viewport.Width - 6
 			if wrapLimit < 20 {
 				wrapLimit = 20
 			}
@@ -116,7 +118,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var formattedUserMsg strings.Builder
 			formattedUserMsg.WriteString("\n")
 			for _, line := range lines {
-				formattedUserMsg.WriteString(UserMsgStyle.Render(line) + "\n")
+				// Right-align simulation by adding padding based on viewport width
+				padding := m.viewport.Width - lipgloss.Width(line) - 5
+				if padding < 0 { padding = 0 }
+				formattedUserMsg.WriteString(strings.Repeat(" ", padding) + UserMsgStyle.Render(line) + "\n")
 			}
 			formattedUserMsg.WriteString("\n")
 			m.messages = append(m.messages, formattedUserMsg.String())
@@ -133,9 +138,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if strings.HasPrefix(input, "/") {
+				mauveStyle := lipgloss.NewStyle().Foreground(MochaMauve)
+				pinkStyle := lipgloss.NewStyle().Foreground(MochaPink)
+				
 				switch input {
 				case "/help":
-					helpText := "\n  /help  - show this help\n  /clear - clear conversation history\n  /exit  - exit the program\n\n"
+					helpText := "\n  " + mauveStyle.Render("/help") + SubtleStyle.Render("  - show this help") +
+								"\n  " + mauveStyle.Render("/clear") + SubtleStyle.Render(" - clear conversation history") +
+								"\n  " + mauveStyle.Render("/exit") + SubtleStyle.Render("  - exit the program\n\n")
 					m.messages = append(m.messages, helpText)
 					m.viewport.SetContent(m.renderContent())
 					m.viewport.GotoBottom()
@@ -147,7 +157,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.viewport.GotoBottom()
 					return m, nil
 				default:
-					m.messages = append(m.messages, fmt.Sprintf("Unknown command: %s\n", input))
+					m.messages = append(m.messages, fmt.Sprintf("\n%s\n", pinkStyle.Render("Unknown command: "+input)))
 					m.viewport.SetContent(m.renderContent())
 					m.viewport.GotoBottom()
 					return m, nil
@@ -160,9 +170,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.thinking = true
-			m.statusText = "processing..."
-			return m, nil
+			m.statusText = "Processing..."
+			return m, m.spinner.Tick
 		default:
+			if !isTextInputKey(msg) {
+				return m, nil
+			}
 			m.textinput, cmd = m.textinput.Update(msg)
 			cmds = append(cmds, cmd)
 		}
@@ -176,15 +189,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.viewport.SetContent(m.renderContent())
 		m.viewport.GotoBottom()
-		return m, nil
+		return m, waitForResponse(m.ctx, m.responseCh)
 
-	case thinkingMsg:
-		m.thinking = msg.thinking
-		m.statusText = msg.status
+	case statusMsg:
+		m.statusText = string(msg)
 		return m, nil
 
 	case logMsg:
-		m.messages = append(m.messages, string(msg))
+		m.messages = append(m.messages, ToolCallStyle.Render("✦ "+string(msg))+"\n")
 		m.viewport.SetContent(m.renderContent())
 		m.viewport.GotoBottom()
 		return m, nil
@@ -194,17 +206,23 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		headerHeight := lipgloss.Height(m.headerView())
 		footerHeight := 3
-		m.viewport.Width = msg.Width - 4
-		m.viewport.Height = msg.Height - headerHeight - footerHeight - 2
-		promptPrefix := PromptStyle.Render("immortal ❯") + " "
+		// Subtract 4 for ViewportStyle border (2) + padding (2)
+		m.viewport.Width = max(1, msg.Width-4)
+		m.viewport.Height = max(1, msg.Height-headerHeight-footerHeight-1)
+		
+		promptPrefix := PromptStyle.Render("❯") + " "
 		m.textinput.Width = max(1, msg.Width-lipgloss.Width(promptPrefix))
+		
 		m.viewport.SetContent(m.renderContent())
 		m.viewport.GotoBottom()
+	
+	case spinner.TickMsg:
+		if m.thinking {
+			m.spinner, cmd = m.spinner.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 	}
 
-	// Mouse events go only to the viewport. KeyMsg events are handled entirely
-	// in the KeyMsg branch above. Never forward unknown messages to textinput
-	// — they can leak mouse/terminal escape sequences into the input field.
 	switch msg := msg.(type) {
 	case tea.MouseMsg:
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -226,51 +244,119 @@ func (m tuiModel) View() string {
 	s.WriteString(m.headerView() + "\n")
 	s.WriteString(ViewportStyle.Render(m.viewport.View()) + "\n")
 
+	// Status Line / Input Area
 	if m.thinking {
-		s.WriteString(StatusStyle.Render("● "+m.statusText) + "\n")
+		s.WriteString(StatusStyle.Render(m.spinner.View()+" "+m.statusText) + "\n")
 	} else {
 		s.WriteString("\n")
 	}
 
-	s.WriteString(PromptStyle.Render("immortal ❯") + " " + m.textinput.View())
+	textStyle := lipgloss.NewStyle().Foreground(MochaText)
+	s.WriteString(PromptStyle.Render("❯") + " " + textStyle.Render(m.textinput.View()))
 	return s.String()
 }
 
-var activeProgram *tea.Program
-
-func listenResponses(ctx context.Context, p *tea.Program, responseCh <-chan string) {
-	for {
+func waitForResponse(ctx context.Context, responseCh <-chan string) tea.Cmd {
+	if responseCh == nil {
+		return nil
+	}
+	return func() tea.Msg {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case resp, ok := <-responseCh:
 			if !ok {
-				return
+				return nil
 			}
-			p.Send(responseMsg(resp))
+			return responseMsg(resp)
 		}
 	}
 }
 
-func RunTUI(ctx context.Context, db *sql.DB, eventsCh chan<- utils.Event, responseCh <-chan string) {
-	ctx, cancel := context.WithCancel(ctx)
+func isTextInputKey(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyRunes:
+		if msg.Paste {
+			return areSafePasteRunes(msg.Runes)
+		}
+		return !msg.Alt && arePrintableRunes(msg.Runes) && !looksLikeTerminalControlFragment(msg.Runes)
+	case tea.KeySpace, tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight,
+		tea.KeyHome, tea.KeyEnd, tea.KeyCtrlA, tea.KeyCtrlB, tea.KeyCtrlD,
+		tea.KeyCtrlE, tea.KeyCtrlF, tea.KeyCtrlH, tea.KeyCtrlK, tea.KeyCtrlU,
+		tea.KeyCtrlV, tea.KeyCtrlW:
+		return true
+	default:
+		return false
+	}
+}
+
+func arePrintableRunes(runes []rune) bool {
+	if len(runes) == 0 {
+		return false
+	}
+	for _, r := range runes {
+		if r < ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func areSafePasteRunes(runes []rune) bool {
+	if len(runes) == 0 {
+		return false
+	}
+	for _, r := range runes {
+		switch r {
+		case '\t', '\n', '\r':
+			continue
+		case 0x1b, 0x7f:
+			return false
+		default:
+			if r < ' ' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func looksLikeTerminalControlFragment(runes []rune) bool {
+	fragment := string(runes)
+	if strings.HasPrefix(fragment, "[<") && strings.Contains(fragment, ";") {
+		return true
+	}
+	if strings.HasPrefix(fragment, "[M") {
+		return true
+	}
+	return false
+}
+
+func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh chan<- utils.Event, responseCh <-chan string) {
 	defer cancel()
 
 	ti := textinput.New()
-	ti.Placeholder = "Ask a question..."
+	ti.Placeholder = "Message immortal-agent..."
 	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 2048
+	
+	ti.TextStyle = lipgloss.NewStyle().Foreground(MochaText)
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(MochaOverlay)
+	ti.Cursor.Style = lipgloss.NewStyle().Foreground(MochaPink)
 
-	// Detect terminal width for initial sizing
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(MochaPink)
+
 	termWidth, _, err := getTermSize()
 	if err != nil || termWidth < 40 {
 		termWidth = 80
 	}
-	promptPrefix := PromptStyle.Render("immortal ❯") + " "
+	promptPrefix := PromptStyle.Render("❯") + " "
 	ti.Width = max(1, termWidth-lipgloss.Width(promptPrefix))
 
-	vp := viewport.New(termWidth-4, 20)
+	vp := viewport.New(max(1, termWidth-4), 20)
 
 	m := &tuiModel{
 		db:         db,
@@ -279,39 +365,33 @@ func RunTUI(ctx context.Context, db *sql.DB, eventsCh chan<- utils.Event, respon
 		eventsCh:   eventsCh,
 		responseCh: responseCh,
 		textinput:  ti,
+		spinner:    s,
 		viewport:   vp,
 	}
 
-	// Pre-load conversation history from DB
 	params := utils.LoadConversation(db, "default")
 	if params != nil {
 		for _, param := range params {
 			role, content := extractRoleContent(param)
-			if role == "" {
+			if role == "" || content == "" {
 				continue
 			}
 			switch role {
 			case "user":
-				if content == "" {
-					continue
-				}
-				wrapLimit := vp.Width - 4
-				if wrapLimit < 20 {
-					wrapLimit = 20
-				}
+				wrapLimit := vp.Width - 6
+				if wrapLimit < 20 { wrapLimit = 20 }
 				wrappedInput := wrapText(content, wrapLimit)
 				lines := strings.Split(wrappedInput, "\n")
 				var formattedUserMsg strings.Builder
 				formattedUserMsg.WriteString("\n")
 				for _, line := range lines {
-					formattedUserMsg.WriteString(UserMsgStyle.Render(line) + "\n")
+					padding := vp.Width - lipgloss.Width(line) - 5
+					if padding < 0 { padding = 0 }
+					formattedUserMsg.WriteString(strings.Repeat(" ", padding) + UserMsgStyle.Render(line) + "\n")
 				}
 				formattedUserMsg.WriteString("\n")
 				m.messages = append(m.messages, formattedUserMsg.String())
 			case "assistant":
-				if content == "" {
-					continue
-				}
 				m.messages = append(m.messages, renderToStringWithWidth(content, vp.Width)+"\n")
 			}
 		}
@@ -320,28 +400,20 @@ func RunTUI(ctx context.Context, db *sql.DB, eventsCh chan<- utils.Event, respon
 	m.viewport.SetContent(m.renderContent())
 	m.viewport.GotoBottom()
 
-	utils.PrintHook = func(text string) {
-		if activeProgram != nil {
-			activeProgram.Send(logMsg(text))
-		}
-	}
-	utils.ThinkingHook = func(thinking bool, status string) {
-		if activeProgram != nil {
-			activeProgram.Send(thinkingMsg{thinking: thinking, status: status})
-		}
-	}
-	utils.DebugHook = func(string) {} // noop — suppress debug prints in TUI mode
-
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	activeProgram = p
+
+	utils.PrintHook = func(text string) {
+		p.Send(logMsg(text))
+	}
+	utils.StatusHook = func(status string) {
+		p.Send(statusMsg(status))
+	}
+	utils.DebugHook = func(string) {}
+
 	defer func() {
-		activeProgram = nil
 		utils.PrintHook = nil
-		utils.ThinkingHook = nil
 		utils.DebugHook = nil
 	}()
-
-	go listenResponses(ctx, p, responseCh)
 
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("TUI error: %v\n", err)
@@ -352,6 +424,7 @@ func renderToStringWithWidth(text string, width int) string {
 	if width < 20 {
 		width = 20
 	}
+
 	r, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(width),
@@ -367,9 +440,7 @@ func renderToStringWithWidth(text string, width int) string {
 }
 
 func wrapText(text string, limit int) string {
-	if limit <= 0 {
-		return text
-	}
+	if limit <= 0 { return text }
 	lines := strings.Split(text, "\n")
 	var wrappedLines []string
 
@@ -378,60 +449,38 @@ func wrapText(text string, limit int) string {
 			wrappedLines = append(wrappedLines, line)
 			continue
 		}
-
 		words := strings.Fields(line)
 		if len(words) == 0 {
 			wrappedLines = append(wrappedLines, "")
 			continue
 		}
-
 		var currentLine string
 		for _, word := range words {
 			if len(currentLine)+len(word)+1 > limit {
-				if currentLine != "" {
-					wrappedLines = append(wrappedLines, currentLine)
-				}
+				if currentLine != "" { wrappedLines = append(wrappedLines, currentLine) }
 				for len(word) > limit {
 					wrappedLines = append(wrappedLines, word[:limit])
 					word = word[limit:]
 				}
 				currentLine = word
 			} else {
-				if currentLine == "" {
-					currentLine = word
-				} else {
-					currentLine += " " + word
-				}
+				if currentLine == "" { currentLine = word } else { currentLine += " " + word }
 			}
 		}
-		if currentLine != "" {
-			wrappedLines = append(wrappedLines, currentLine)
-		}
+		if currentLine != "" { wrappedLines = append(wrappedLines, currentLine) }
 	}
-
 	return strings.Join(wrappedLines, "\n")
 }
 
-// extractRoleContent extracts the role and content from a ChatCompletionMessageParamUnion
-// by marshaling to JSON and back to a map.
 func extractRoleContent(param interface{}) (string, string) {
 	data, err := json.Marshal(param)
-	if err != nil {
-		return "", ""
-	}
+	if err != nil { return "", "" }
 	var msg map[string]any
-	if err := json.Unmarshal(data, &msg); err != nil {
-		return "", ""
-	}
+	if err := json.Unmarshal(data, &msg); err != nil { return "", "" }
 
 	role, _ := msg["role"].(string)
-
-	// Content can be a string or nil (tool calls, etc.)
 	content := ""
-	if c, ok := msg["content"].(string); ok {
-		content = c
-	}
-
+	if c, ok := msg["content"].(string); ok { content = c }
 	return role, content
 }
 
@@ -439,4 +488,6 @@ func getTermSize() (int, int, error) {
 	return term.GetSize(int(os.Stdin.Fd()))
 }
 
-
+func stringPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool       { return &b }
+func uintPtr(u uint) *uint       { return &u }

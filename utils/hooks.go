@@ -3,9 +3,9 @@ package utils
 import "fmt"
 
 var (
-	PrintHook    func(string)
-	ThinkingHook func(bool, string)
-	DebugHook    func(string)
+	PrintHook  func(string)
+	StatusHook func(string)
+	DebugHook  func(string)
 )
 
 // DebugPrint routes debug output through DebugHook when set (TUI mode),

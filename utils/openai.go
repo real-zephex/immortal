@@ -428,6 +428,9 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 
 		DebugPrint("===Tool Calls===\n")
 		for _, tool := range toolCalls {
+			if StatusHook != nil {
+				StatusHook(fmt.Sprintf("⚡ %s", tool.Function.Name))
+			}
 			if PrintHook != nil {
 				PrintHook(fmt.Sprintf("🔧 Tool: %s\n", tool.Function.Name))
 			}

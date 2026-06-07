@@ -130,6 +130,8 @@ func urlSearch(args map[string]any) (string, error) {
 		return "", fmt.Errorf("[ERROR] Failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", TOKEN))
+	req.Header.Set("X-Retain-Images", "none")
+	req.Header.Set("X-Return-Format", "text")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

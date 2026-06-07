@@ -25,6 +25,7 @@ var (
 	flagTUI     = flag.Bool("tui", false, "force TUI mode")
 	flagNoTUI   = flag.Bool("no-tui", false, "disable TUI mode (headless)")
 	flagNoTG    = flag.Bool("no-tg", false, "disable Telegram bot")
+	testFlag    = flag.Bool("test", false, "run in test mode (no TUI, no Telegram)")
 )
 
 var responses int = 0
@@ -73,6 +74,18 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 	}
 	defer f.Close()
 
+	// signalCompletion sends response to clear TUI thinking indicator.
+	// Must be non-blocking so recovery on a cancelled context doesn't hang.
+	signalCompletion := func(r string) {
+		if responseCh == nil {
+			return
+		}
+		select {
+		case responseCh <- r:
+		case <-ctx.Done():
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -114,9 +127,18 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 				params = append(params, openai.UserMessage(content))
 			}
 
-			response := utils.OpenAIManager(ctx, &params)
+			response := func() (r string) {
+				defer func() {
+					if rec := recover(); rec != nil {
+						errMsg := fmt.Sprintf("panic: %v", rec)
+						utils.DebugPrint("[PANIC] %s\n", errMsg)
+						r = ""
+					}
+				}()
+				return utils.OpenAIManager(ctx, &params)
+			}()
 
-		if response != "" {
+			if response != "" {
 				responses++
 				currentCount := responses
 				timestamp := time.Now().Format("2006-01-02 15:04:05")
@@ -127,7 +149,7 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 					fmt.Printf("Error writing to file: %v\n", err)
 				}
 
-				fmt.Printf("Processed task: %s (Total: %d)\n", content, currentCount)
+				utils.DebugPrint("Processed task: %s (Total: %d)\n", content, currentCount)
 
 				// Persist full conversation — skip for scheduled task firings
 				if !isScheduled {
@@ -136,15 +158,8 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 			}
 
 			// Always signal completion to TUI so thinking indicator clears,
-			// even on empty response (error/empty cases).
-			if responseCh != nil {
-				select {
-				case responseCh <- response:
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			// even on empty response (error/empty/panic cases).
+			signalCompletion(response)
 		}
 	}
 }
@@ -184,6 +199,12 @@ func main() {
 		cancel()
 	}()
 
+	// changes here for full blown audio based agent
+	if *testFlag {
+		fmt.Println("Test mode enabled. No TUI, no Telegram.")
+		return
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	eventsChannels := make(chan utils.Event, 100)
@@ -196,11 +217,9 @@ func main() {
 
 	// Auto-start Telegram bot if TELEGRAM_BOT_TOKEN is set and not disabled
 	if os.Getenv("TELEGRAM_BOT_TOKEN") != "" && !*flagNoTG {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			utils.StartTelegramBot(ctx, db)
-		}()
+		})
 		fmt.Println("Telegram bot goroutine started.")
 	}
 
@@ -213,11 +232,9 @@ func main() {
 	}
 
 	if useTUI {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			tui.RunTUI(ctx, db, eventsChannels, responseCh)
-		}()
+		wg.Go(func() {
+			tui.RunTUI(ctx, cancel, db, eventsChannels, responseCh)
+		})
 		fmt.Println("TUI started.")
 	}
 
