@@ -10,6 +10,7 @@ import (
 
 	"immortal/utils"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -78,12 +79,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.cancel()
 			return m, tea.Quit
-		case "pgup":
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		case "pgdown":
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
 		case "up":
 			if len(m.history) > 0 && m.historyIdx > 0 {
 				m.historyIdx--
@@ -357,6 +352,12 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 	ti.Width = max(1, termWidth-lipgloss.Width(promptPrefix))
 
 	vp := viewport.New(max(1, termWidth-4), 20)
+	vp.KeyMap.Up = key.NewBinding(key.WithKeys("up"))
+	vp.KeyMap.Down = key.NewBinding(key.WithKeys("down"))
+	vp.KeyMap.HalfPageUp = key.NewBinding()
+	vp.KeyMap.HalfPageDown = key.NewBinding()
+	vp.KeyMap.PageUp = key.NewBinding(key.WithKeys("pgup"))
+	vp.KeyMap.PageDown = key.NewBinding(key.WithKeys("pgdown"))
 
 	m := &tuiModel{
 		db:         db,
