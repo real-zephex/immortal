@@ -14,6 +14,7 @@ import (
 
 	"net/http"
 	"net/url"
+	"syscall"
 
 	"github.com/openai/openai-go/v3"
 )
@@ -155,30 +156,64 @@ func executeBash(args map[string]any) (string, error) {
 		return "", fmt.Errorf("[ERROR] Please make sure you are passing both the reason and command for this tool")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	cmd := exec.Command("bash", "-c", command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] failed to create stdout pipe: %w", err)
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		stdoutR.Close()
+		stdoutW.Close()
+		return "", fmt.Errorf("[ERROR] failed to create stderr pipe: %w", err)
+	}
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		if output != "" {
-			output += "\n"
-		}
-		output += "--- stderr ---\n" + stderr.String()
+	if err := cmd.Start(); err != nil {
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return "", fmt.Errorf("[ERROR] failed to start command: %w", err)
 	}
 
-	if err != nil {
+	// Close our copy of write ends so reads below get EOF when process exits
+	stdoutW.Close()
+	stderrW.Close()
+
+	// Kill entire process group on timeout
+	timer := time.AfterFunc(30*time.Second, func() {
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	})
+
+	// Collect output in goroutine so we can unblock by closing read ends
+	outputDone := make(chan struct{})
+	var outputBuf bytes.Buffer
+	go func() {
+		io.Copy(&outputBuf, stdoutR)
+		io.Copy(&outputBuf, stderrR)
+		close(outputDone)
+	}()
+
+	// Wait for process and output collection
+	waitErr := cmd.Wait()
+	timer.Stop()
+
+	// Force-close read ends to unblock io.Copy if process was killed
+	stdoutR.Close()
+	stderrR.Close()
+	<-outputDone
+
+	output := outputBuf.String()
+
+	if waitErr != nil {
 		if output != "" {
 			output += "\n"
 		}
-		output += fmt.Sprintf("--- error: %v", err)
+		output += fmt.Sprintf("--- error: %v", waitErr)
 	}
 
 	if len(output) > maxOutputSize {
