@@ -21,6 +21,10 @@ Core tools available across all contexts:
 - web_search: Search the web for information on a given topic (backed by Jina).
 - url_fetch: Fetch and read the content of a given URL (backed by Jina Reader).
 - mail: Manage AgentMail inbox — list threads, fetch a thread, send email, reply to a message, forward a message, or delete a thread.
+- memory_add: Store a fact or preference you learn about the user for long-term recall across conversations. Use this when the user tells you something you should remember. The tool automatically deduplicates by content — use memory_update when your understanding evolves.
+- memory_view: List all stored memories. Use this to recall what you know about the user and their preferences.
+- memory_update: Update an existing memory with new content. Use this when the user corrects a stored fact or your understanding of their preferences changes.
+- memory_delete: Remove a memory by its ID. Use this when a stored fact is no longer relevant or the user asks you to forget something.
 
 Telegram-specific tools (only available when communicating over Telegram):
 - schedule_task: Schedule a one-shot or repeating task. The task will fire after the specified interval (e.g. "10m", "1h", "daily", "hourly", "weekly") and be presented to you as a new user message prefixed with "⏰". For non-repeating tasks, supply repeat: false; for repeating, supply repeat: true.
@@ -386,9 +390,84 @@ var (
 		},
 	}
 
-	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool, mailTool, localScheduleTaskTool, localCancelTaskTool, localListTasksTool}
+	memoryAddTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "memory_add",
+				Description: openai.String("Store a fact or preference about the user for long-term recall across conversations."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"content": map[string]any{
+							"type":        "string",
+							"description": "The fact or preference to remember",
+						},
+					},
+					"required": []string{"content"},
+				},
+			},
+		},
+	}
+
+	memoryViewTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "memory_view",
+				Description: openai.String("List all stored memories to recall what you know about the user."),
+				Parameters: openai.FunctionParameters{
+					"type":       "object",
+					"properties": map[string]any{},
+					"required":   []string{},
+				},
+			},
+		},
+	}
+
+	memoryUpdateTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "memory_update",
+				Description: openai.String("Update an existing memory with new content. Use when the user corrects a stored fact."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"memory_id": map[string]any{
+							"type":        "string",
+							"description": "The ID of the memory to update",
+						},
+						"content": map[string]any{
+							"type":        "string",
+							"description": "The new content for the memory",
+						},
+					},
+					"required": []string{"memory_id", "content"},
+				},
+			},
+		},
+	}
+
+	memoryDeleteTool = openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        "memory_delete",
+				Description: openai.String("Delete a stored memory by its ID. Use when a fact is no longer relevant."),
+				Parameters: openai.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"memory_id": map[string]any{
+							"type":        "string",
+							"description": "The ID of the memory to delete",
+						},
+					},
+					"required": []string{"memory_id"},
+				},
+			},
+		},
+	}
+
+	orchestratorTools = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, webSearchTool, urlFetchTool, mailTool, localScheduleTaskTool, localCancelTaskTool, localListTasksTool, memoryAddTool, memoryViewTool, memoryUpdateTool, memoryDeleteTool}
 	subAgentTools     = []openai.ChatCompletionToolUnionParam{bashTool, webSearchTool, urlFetchTool}
-	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool, mailTool, scheduleTaskTool, cancelTaskTool, listTasksTool}
+	TelegramTools     = []openai.ChatCompletionToolUnionParam{bashTool, spawnAgentsTool, sendDocumentTool, sendImageTool, webSearchTool, urlFetchTool, mailTool, scheduleTaskTool, cancelTaskTool, listTasksTool, memoryAddTool, memoryViewTool, memoryUpdateTool, memoryDeleteTool}
 )
 
 func OpenAIManager(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion) string {

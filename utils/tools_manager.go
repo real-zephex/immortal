@@ -60,6 +60,14 @@ func ExecuteTool(toolName string, args map[string]any) (string, error) {
 		return executeLocalCancelTask(args)
 	case "local_list_scheduled_tasks":
 		return executeLocalListTasks(args)
+	case "memory_add":
+		return executeMemoryAdd(args)
+	case "memory_view":
+		return executeMemoryView(args)
+	case "memory_update":
+		return executeMemoryUpdate(args)
+	case "memory_delete":
+		return executeMemoryDelete(args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -439,4 +447,54 @@ func executeLocalCancelTask(args map[string]any) (string, error) {
 func executeLocalListTasks(_ map[string]any) (string, error) {
 	tasks := ListLocalTasks()
 	return formatLocalTaskList(tasks), nil
+}
+
+func executeMemoryAdd(args map[string]any) (string, error) {
+	content, _ := args["content"].(string)
+	if strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("content is required")
+	}
+	record, err := AddMemory(context.Background(), DB, content)
+	if err != nil {
+		return "", fmt.Errorf("failed to store memory: %w", err)
+	}
+	return fmt.Sprintf("Stored memory [%s]: %s", record.ID, record.Content), nil
+}
+
+func executeMemoryView(_ map[string]any) (string, error) {
+	records, err := ListMemories(context.Background(), DB)
+	if err != nil {
+		return "", fmt.Errorf("failed to list memories: %w", err)
+	}
+	if len(records) == 0 {
+		return "No memories stored.", nil
+	}
+	var b strings.Builder
+	for _, r := range records {
+		b.WriteString(fmt.Sprintf("[%s] %s\n", r.ID[:8], r.Content))
+	}
+	return b.String(), nil
+}
+
+func executeMemoryUpdate(args map[string]any) (string, error) {
+	id, _ := args["memory_id"].(string)
+	content, _ := args["content"].(string)
+	if id == "" || strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("memory_id and content are required")
+	}
+	if err := UpdateMemory(context.Background(), DB, id, content); err != nil {
+		return "", fmt.Errorf("failed to update memory: %w", err)
+	}
+	return fmt.Sprintf("Memory %s updated.", id), nil
+}
+
+func executeMemoryDelete(args map[string]any) (string, error) {
+	id, _ := args["memory_id"].(string)
+	if id == "" {
+		return "", fmt.Errorf("memory_id is required")
+	}
+	if err := DeleteMemory(context.Background(), DB, id); err != nil {
+		return "", fmt.Errorf("failed to delete memory: %w", err)
+	}
+	return fmt.Sprintf("Memory %s deleted.", id), nil
 }

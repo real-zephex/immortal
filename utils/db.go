@@ -12,6 +12,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+var DB *sql.DB
+
 func InitDB() *sql.DB {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -33,6 +35,17 @@ func InitDB() *sql.DB {
 	`)
 	if err != nil {
 		log.Fatalf("Failed to create conversations table: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS memories (
+			id         TEXT PRIMARY KEY,
+			content    TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		log.Fatalf("Failed to create memories table: %v", err)
 	}
 
 	return db

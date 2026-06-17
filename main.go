@@ -170,6 +170,7 @@ func main() {
 
 	fmt.Println("Initializing database...")
 	db := utils.InitDB()
+	utils.DB = db
 	defer db.Close()
 	fmt.Println("Database initialized.")
 
