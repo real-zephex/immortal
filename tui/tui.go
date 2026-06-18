@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -23,6 +24,13 @@ import (
 type responseMsg string
 type statusMsg string
 type logMsg string
+type sendErrorMsg string
+
+const (
+	defaultViewportHeight = 20
+	minMessageWidth       = 20
+	maxHistoryEntries     = 200
+)
 
 type tuiModel struct {
 	db         *sql.DB
@@ -39,6 +47,7 @@ type tuiModel struct {
 	height    int
 
 	thinking   bool
+	pending    int
 	statusText string
 	history    []string
 	historyIdx int
@@ -51,13 +60,13 @@ func (m tuiModel) Init() tea.Cmd {
 func (m tuiModel) headerView() string {
 	title := HeaderStyle.Render(" 🤖 IMMORTAL AGENT ")
 	meta := SubtleStyle.Render(" /help | /clear | pgup/pgdn ")
-	
+
 	barWidth := m.width - lipgloss.Width(title) - lipgloss.Width(meta) - 2
 	if barWidth < 0 {
 		barWidth = 0
 	}
 	bar := SubtleStyle.Render(strings.Repeat("─", barWidth))
-	
+
 	return lipgloss.JoinHorizontal(lipgloss.Center, title, " ", meta, " ", bar)
 }
 
@@ -103,29 +112,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.textinput.SetValue("")
-
-			wrapLimit := m.viewport.Width - 6
-			if wrapLimit < 20 {
-				wrapLimit = 20
-			}
-			wrappedInput := wrapText(input, wrapLimit)
-			lines := strings.Split(wrappedInput, "\n")
-			var formattedUserMsg strings.Builder
-			formattedUserMsg.WriteString("\n")
-			for _, line := range lines {
-				// Right-align simulation by adding padding based on viewport width
-				padding := m.viewport.Width - lipgloss.Width(line) - 5
-				if padding < 0 { padding = 0 }
-				formattedUserMsg.WriteString(strings.Repeat(" ", padding) + UserMsgStyle.Render(line) + "\n")
-			}
-			formattedUserMsg.WriteString("\n")
-			m.messages = append(m.messages, formattedUserMsg.String())
-
-			m.viewport.SetContent(m.renderContent())
-			m.viewport.GotoBottom()
-
-			m.history = append(m.history, input)
-			m.historyIdx = len(m.history)
+			m.addHistory(input)
 
 			if input == "/exit" || input == "/quit" {
 				m.cancel()
@@ -135,12 +122,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(input, "/") {
 				mauveStyle := lipgloss.NewStyle().Foreground(MochaMauve)
 				pinkStyle := lipgloss.NewStyle().Foreground(MochaPink)
-				
+
 				switch input {
 				case "/help":
 					helpText := "\n  " + mauveStyle.Render("/help") + SubtleStyle.Render("  - show this help") +
-								"\n  " + mauveStyle.Render("/clear") + SubtleStyle.Render(" - clear conversation history") +
-								"\n  " + mauveStyle.Render("/exit") + SubtleStyle.Render("  - exit the program\n\n")
+						"\n  " + mauveStyle.Render("/clear") + SubtleStyle.Render(" - clear conversation history") +
+						"\n  " + mauveStyle.Render("/exit") + SubtleStyle.Render("  - exit the program\n\n")
 					m.messages = append(m.messages, helpText)
 					m.viewport.SetContent(m.renderContent())
 					m.viewport.GotoBottom()
@@ -150,6 +137,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.messages = nil
 					m.viewport.SetContent("")
 					m.viewport.GotoBottom()
+					m.statusText = "Conversation cleared"
 					return m, nil
 				default:
 					m.messages = append(m.messages, fmt.Sprintf("\n%s\n", pinkStyle.Render("Unknown command: "+input)))
@@ -159,14 +147,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			select {
-			case m.eventsCh <- utils.Event{Type: utils.EventTypeUserMessage, Payload: input}:
-			default:
-			}
+			m.messages = append(m.messages, formatUserMessage(input, m.viewport.Width))
+			m.viewport.SetContent(m.renderContent())
+			m.viewport.GotoBottom()
 
 			m.thinking = true
-			m.statusText = "Processing..."
-			return m, m.spinner.Tick
+			m.pending++
+			m.statusText = pendingStatus(m.pending)
+			return m, tea.Batch(m.spinner.Tick, sendUserMessage(m.ctx, m.eventsCh, input))
 		default:
 			if !isTextInputKey(msg) {
 				return m, nil
@@ -176,18 +164,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case responseMsg:
-		m.thinking = false
-		m.statusText = ""
+		if m.pending > 0 {
+			m.pending--
+		}
+		m.thinking = m.pending > 0
+		m.statusText = pendingStatus(m.pending)
 		responseText := string(msg)
 		if responseText != "" {
 			m.messages = append(m.messages, renderToStringWithWidth(responseText, m.viewport.Width)+"\n")
+		} else {
+			m.messages = append(m.messages, SubtleStyle.Render("\nNo response returned.\n"))
 		}
 		m.viewport.SetContent(m.renderContent())
 		m.viewport.GotoBottom()
 		return m, waitForResponse(m.ctx, m.responseCh)
 
 	case statusMsg:
-		m.statusText = string(msg)
+		if m.thinking {
+			m.statusText = string(msg)
+		}
 		return m, nil
 
 	case logMsg:
@@ -196,21 +191,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 
+	case sendErrorMsg:
+		if m.pending > 0 {
+			m.pending--
+		}
+		m.thinking = m.pending > 0
+		m.statusText = pendingStatus(m.pending)
+		m.messages = append(m.messages, fmt.Sprintf("\n%s\n", lipgloss.NewStyle().Foreground(MochaPink).Render(string(msg))))
+		m.viewport.SetContent(m.renderContent())
+		m.viewport.GotoBottom()
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		headerHeight := lipgloss.Height(m.headerView())
-		footerHeight := 3
-		// Subtract 4 for ViewportStyle border (2) + padding (2)
-		m.viewport.Width = max(1, msg.Width-4)
-		m.viewport.Height = max(1, msg.Height-headerHeight-footerHeight-1)
-		
-		promptPrefix := PromptStyle.Render("❯") + " "
-		m.textinput.Width = max(1, msg.Width-lipgloss.Width(promptPrefix))
-		
+		m.resize(msg.Width, msg.Height)
+
 		m.viewport.SetContent(m.renderContent())
 		m.viewport.GotoBottom()
-	
+
 	case spinner.TickMsg:
 		if m.thinking {
 			m.spinner, cmd = m.spinner.Update(msg)
@@ -228,6 +227,29 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *tuiModel) addHistory(input string) {
+	if input == "" {
+		return
+	}
+	if len(m.history) == 0 || m.history[len(m.history)-1] != input {
+		m.history = append(m.history, input)
+	}
+	if len(m.history) > maxHistoryEntries {
+		m.history = append([]string(nil), m.history[len(m.history)-maxHistoryEntries:]...)
+	}
+	m.historyIdx = len(m.history)
+}
+
+func (m *tuiModel) resize(width, height int) {
+	headerHeight := lipgloss.Height(m.headerView())
+	footerHeight := 3
+	m.viewport.Width = max(1, width-4)
+	m.viewport.Height = max(1, height-headerHeight-footerHeight-1)
+
+	promptPrefix := PromptStyle.Render("❯") + " "
+	m.textinput.Width = max(1, width-lipgloss.Width(promptPrefix))
 }
 
 func (m tuiModel) View() string {
@@ -265,6 +287,35 @@ func waitForResponse(ctx context.Context, responseCh <-chan string) tea.Cmd {
 			}
 			return responseMsg(resp)
 		}
+	}
+}
+
+func sendUserMessage(ctx context.Context, eventsCh chan<- utils.Event, input string) tea.Cmd {
+	return func() tea.Msg {
+		if eventsCh == nil {
+			return sendErrorMsg("Unable to send message: event channel is not available.")
+		}
+		select {
+		case eventsCh <- utils.Event{Type: utils.EventTypeUserMessage, Payload: input}:
+			return nil
+		case <-ctx.Done():
+			err := ctx.Err()
+			if err == nil {
+				err = errors.New("context cancelled")
+			}
+			return sendErrorMsg("Unable to send message: " + err.Error())
+		}
+	}
+}
+
+func pendingStatus(pending int) string {
+	switch {
+	case pending <= 0:
+		return ""
+	case pending == 1:
+		return "Processing..."
+	default:
+		return fmt.Sprintf("Processing %d messages...", pending)
 	}
 }
 
@@ -335,7 +386,7 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 2048
-	
+
 	ti.TextStyle = lipgloss.NewStyle().Foreground(MochaText)
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(MochaOverlay)
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(MochaPink)
@@ -351,7 +402,7 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 	promptPrefix := PromptStyle.Render("❯") + " "
 	ti.Width = max(1, termWidth-lipgloss.Width(promptPrefix))
 
-	vp := viewport.New(max(1, termWidth-4), 20)
+	vp := viewport.New(max(1, termWidth-4), defaultViewportHeight)
 	vp.KeyMap.Up = key.NewBinding(key.WithKeys("up"))
 	vp.KeyMap.Down = key.NewBinding(key.WithKeys("down"))
 	vp.KeyMap.HalfPageUp = key.NewBinding()
@@ -379,19 +430,8 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 			}
 			switch role {
 			case "user":
-				wrapLimit := vp.Width - 6
-				if wrapLimit < 20 { wrapLimit = 20 }
-				wrappedInput := wrapText(content, wrapLimit)
-				lines := strings.Split(wrappedInput, "\n")
-				var formattedUserMsg strings.Builder
-				formattedUserMsg.WriteString("\n")
-				for _, line := range lines {
-					padding := vp.Width - lipgloss.Width(line) - 5
-					if padding < 0 { padding = 0 }
-					formattedUserMsg.WriteString(strings.Repeat(" ", padding) + UserMsgStyle.Render(line) + "\n")
-				}
-				formattedUserMsg.WriteString("\n")
-				m.messages = append(m.messages, formattedUserMsg.String())
+				m.messages = append(m.messages, formatUserMessage(content, vp.Width))
+				m.addHistory(content)
 			case "assistant":
 				m.messages = append(m.messages, renderToStringWithWidth(content, vp.Width)+"\n")
 			}
@@ -403,6 +443,10 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
+	prevPrintHook := utils.PrintHook
+	prevStatusHook := utils.StatusHook
+	prevDebugHook := utils.DebugHook
+
 	utils.PrintHook = func(text string) {
 		p.Send(logMsg(text))
 	}
@@ -412,8 +456,9 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 	utils.DebugHook = func(string) {}
 
 	defer func() {
-		utils.PrintHook = nil
-		utils.DebugHook = nil
+		utils.PrintHook = prevPrintHook
+		utils.StatusHook = prevStatusHook
+		utils.DebugHook = prevDebugHook
 	}()
 
 	if _, err := p.Run(); err != nil {
@@ -422,8 +467,8 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 }
 
 func renderToStringWithWidth(text string, width int) string {
-	if width < 20 {
-		width = 20
+	if width < minMessageWidth {
+		width = minMessageWidth
 	}
 
 	r, err := glamour.NewTermRenderer(
@@ -440,13 +485,35 @@ func renderToStringWithWidth(text string, width int) string {
 	return out
 }
 
+func formatUserMessage(text string, width int) string {
+	wrapLimit := width - 6
+	if wrapLimit < minMessageWidth {
+		wrapLimit = minMessageWidth
+	}
+	wrappedInput := wrapText(text, wrapLimit)
+	lines := strings.Split(wrappedInput, "\n")
+	var formatted strings.Builder
+	formatted.WriteString("\n")
+	for _, line := range lines {
+		padding := width - lipgloss.Width(line) - 5
+		if padding < 0 {
+			padding = 0
+		}
+		formatted.WriteString(strings.Repeat(" ", padding) + UserMsgStyle.Render(line) + "\n")
+	}
+	formatted.WriteString("\n")
+	return formatted.String()
+}
+
 func wrapText(text string, limit int) string {
-	if limit <= 0 { return text }
+	if limit <= 0 {
+		return text
+	}
 	lines := strings.Split(text, "\n")
 	var wrappedLines []string
 
 	for _, line := range lines {
-		if len(line) <= limit {
+		if lipgloss.Width(line) <= limit {
 			wrappedLines = append(wrappedLines, line)
 			continue
 		}
@@ -457,31 +524,65 @@ func wrapText(text string, limit int) string {
 		}
 		var currentLine string
 		for _, word := range words {
-			if len(currentLine)+len(word)+1 > limit {
-				if currentLine != "" { wrappedLines = append(wrappedLines, currentLine) }
-				for len(word) > limit {
-					wrappedLines = append(wrappedLines, word[:limit])
-					word = word[limit:]
+			nextWidth := lipgloss.Width(word)
+			if currentLine != "" {
+				nextWidth += lipgloss.Width(currentLine) + 1
+			}
+			if nextWidth > limit {
+				if currentLine != "" {
+					wrappedLines = append(wrappedLines, currentLine)
+				}
+				for lipgloss.Width(word) > limit {
+					part, rest := splitByDisplayWidth(word, limit)
+					wrappedLines = append(wrappedLines, part)
+					word = rest
 				}
 				currentLine = word
 			} else {
-				if currentLine == "" { currentLine = word } else { currentLine += " " + word }
+				if currentLine == "" {
+					currentLine = word
+				} else {
+					currentLine += " " + word
+				}
 			}
 		}
-		if currentLine != "" { wrappedLines = append(wrappedLines, currentLine) }
+		if currentLine != "" {
+			wrappedLines = append(wrappedLines, currentLine)
+		}
 	}
 	return strings.Join(wrappedLines, "\n")
 }
 
+func splitByDisplayWidth(text string, limit int) (string, string) {
+	if limit <= 0 {
+		return "", text
+	}
+	width := 0
+	for idx, r := range text {
+		rw := lipgloss.Width(string(r))
+		if width > 0 && width+rw > limit {
+			return text[:idx], text[idx:]
+		}
+		width += rw
+	}
+	return text, ""
+}
+
 func extractRoleContent(param interface{}) (string, string) {
 	data, err := json.Marshal(param)
-	if err != nil { return "", "" }
+	if err != nil {
+		return "", ""
+	}
 	var msg map[string]any
-	if err := json.Unmarshal(data, &msg); err != nil { return "", "" }
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return "", ""
+	}
 
 	role, _ := msg["role"].(string)
 	content := ""
-	if c, ok := msg["content"].(string); ok { content = c }
+	if c, ok := msg["content"].(string); ok {
+		content = c
+	}
 	return role, content
 }
 
