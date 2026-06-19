@@ -149,7 +149,9 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 					fmt.Printf("Error writing to file: %v\n", err)
 				}
 
-				utils.DebugPrint("Processed task: %s (Total: %d)\n", content, currentCount)
+				if utils.PrintHook == nil {
+					utils.DebugPrint("Processed task: %s (Total: %d)\n", content, currentCount)
+				}
 
 				// Persist full conversation — skip for scheduled task firings
 				if !isScheduled {

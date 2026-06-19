@@ -58,16 +58,7 @@ func (m tuiModel) Init() tea.Cmd {
 }
 
 func (m tuiModel) headerView() string {
-	title := HeaderStyle.Render(" 🤖 IMMORTAL AGENT ")
-	meta := SubtleStyle.Render(" /help | /clear | pgup/pgdn ")
-
-	barWidth := m.width - lipgloss.Width(title) - lipgloss.Width(meta) - 2
-	if barWidth < 0 {
-		barWidth = 0
-	}
-	bar := SubtleStyle.Render(strings.Repeat("─", barWidth))
-
-	return lipgloss.JoinHorizontal(lipgloss.Center, title, " ", meta, " ", bar)
+	return HeaderStyle.Render(" 🦀 IMMORTAL ") + "  " + SubtleStyle.Render("/help")
 }
 
 func (m tuiModel) renderContent() string {
@@ -152,6 +143,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 
 			m.thinking = true
+			m.resize(m.width, m.height)
 			m.pending++
 			m.statusText = pendingStatus(m.pending)
 			return m, tea.Batch(m.spinner.Tick, sendUserMessage(m.ctx, m.eventsCh, input))
@@ -168,10 +160,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending--
 		}
 		m.thinking = m.pending > 0
+		m.resize(m.width, m.height)
 		m.statusText = pendingStatus(m.pending)
 		responseText := string(msg)
 		if responseText != "" {
-			m.messages = append(m.messages, renderToStringWithWidth(responseText, m.viewport.Width)+"\n")
+			m.messages = append(m.messages, renderToStringWithWidth(responseText, m.viewport.Width))
 		} else {
 			m.messages = append(m.messages, SubtleStyle.Render("\nNo response returned.\n"))
 		}
@@ -186,7 +179,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case logMsg:
-		m.messages = append(m.messages, ToolCallStyle.Render("✦ "+string(msg))+"\n")
+		text := string(msg)
+		style := ToolCallStyle
+		if strings.HasPrefix(text, "[ERROR]") {
+			style = ErrorMsgStyle
+		}
+		m.messages = append(m.messages, style.Render("✦ "+text)+"\n")
 		m.viewport.SetContent(m.renderContent())
 		m.viewport.GotoBottom()
 		return m, nil
@@ -196,6 +194,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending--
 		}
 		m.thinking = m.pending > 0
+		m.resize(m.width, m.height)
 		m.statusText = pendingStatus(m.pending)
 		m.messages = append(m.messages, fmt.Sprintf("\n%s\n", lipgloss.NewStyle().Foreground(MochaPink).Render(string(msg))))
 		m.viewport.SetContent(m.renderContent())
@@ -244,9 +243,12 @@ func (m *tuiModel) addHistory(input string) {
 
 func (m *tuiModel) resize(width, height int) {
 	headerHeight := lipgloss.Height(m.headerView())
-	footerHeight := 3
-	m.viewport.Width = max(1, width-4)
-	m.viewport.Height = max(1, height-headerHeight-footerHeight-1)
+	statusLines := 0
+	if m.thinking {
+		statusLines = 1
+	}
+	m.viewport.Width = max(1, width)
+	m.viewport.Height = max(1, height-headerHeight-statusLines-2)
 
 	promptPrefix := PromptStyle.Render("❯") + " "
 	m.textinput.Width = max(1, width-lipgloss.Width(promptPrefix))
@@ -259,15 +261,14 @@ func (m tuiModel) View() string {
 
 	var s strings.Builder
 	s.WriteString(m.headerView() + "\n")
-	s.WriteString(ViewportStyle.Render(m.viewport.View()) + "\n")
+	s.WriteString(ViewportStyle.Render(m.viewport.View()))
 
-	// Status Line / Input Area
+	// Status Line (only shown when processing)
 	if m.thinking {
-		s.WriteString(StatusStyle.Render(m.spinner.View()+" "+m.statusText) + "\n")
-	} else {
-		s.WriteString("\n")
+		s.WriteString("\n" + StatusStyle.Render(m.spinner.View()+" "+m.statusText))
 	}
 
+	s.WriteString("\n")
 	textStyle := lipgloss.NewStyle().Foreground(MochaText)
 	s.WriteString(PromptStyle.Render("❯") + " " + textStyle.Render(m.textinput.View()))
 	return s.String()
@@ -433,7 +434,7 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 				m.messages = append(m.messages, formatUserMessage(content, vp.Width))
 				m.addHistory(content)
 			case "assistant":
-				m.messages = append(m.messages, renderToStringWithWidth(content, vp.Width)+"\n")
+				m.messages = append(m.messages, renderToStringWithWidth(content, vp.Width))
 			}
 		}
 	}
@@ -493,13 +494,8 @@ func formatUserMessage(text string, width int) string {
 	wrappedInput := wrapText(text, wrapLimit)
 	lines := strings.Split(wrappedInput, "\n")
 	var formatted strings.Builder
-	formatted.WriteString("\n")
 	for _, line := range lines {
-		padding := width - lipgloss.Width(line) - 5
-		if padding < 0 {
-			padding = 0
-		}
-		formatted.WriteString(strings.Repeat(" ", padding) + UserMsgStyle.Render(line) + "\n")
+		formatted.WriteString(UserMsgStyle.Render(line) + "\n")
 	}
 	formatted.WriteString("\n")
 	return formatted.String()

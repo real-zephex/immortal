@@ -18,28 +18,26 @@ var (
 var (
 	// User messages align right/distinct
 	UserMsgStyle = lipgloss.NewStyle().
-			Foreground(MochaBase).
-			Background(MochaBlue).
-			Padding(0, 1).
-			Bold(true).
-			MarginLeft(2)
+			Foreground(MochaText).
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(MochaBlue).
+			Padding(0, 0, 0, 1).
+			Bold(true)
 
 	// AI Assistant messages
 	AssistantMsgStyle = lipgloss.NewStyle().
-			Foreground(MochaText)
+				Foreground(MochaText)
 
 	// Main scrolling window
 	ViewportStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(MochaMauve).
-			Padding(0, 1)
+			Padding(0, 0)
 
 	// Top banner
 	HeaderStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(MochaBase).
 			Background(MochaMauve).
-			Padding(0, 2)
+			Padding(0, 1)
 
 	// Faint/meta text
 	SubtleStyle = lipgloss.NewStyle().
@@ -60,4 +58,9 @@ var (
 	ToolCallStyle = lipgloss.NewStyle().
 			Foreground(MochaGreen).
 			Italic(true)
+
+	// Error/debug messages
+	ErrorMsgStyle = lipgloss.NewStyle().
+			Foreground(MochaPink).
+			Bold(true)
 )

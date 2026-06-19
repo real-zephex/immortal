@@ -492,7 +492,11 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 			},
 		)
 		if err != nil {
-			DebugPrint("[ERROR] %v\n", err)
+			if PrintHook != nil {
+				PrintHook(fmt.Sprintf("[ERROR] %v\n", err))
+			} else {
+				DebugPrint("[ERROR] %v\n", err)
+			}
 			return ""
 		}
 
@@ -507,19 +511,23 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 
 		DebugPrint("===Tool Calls===\n")
 		for _, tool := range toolCalls {
-			if StatusHook != nil {
-				StatusHook(fmt.Sprintf("⚡ %s", tool.Function.Name))
-			}
-			if PrintHook != nil {
-				PrintHook(fmt.Sprintf("🔧 Tool: %s\n", tool.Function.Name))
-			}
-
 			var toolArguments map[string]any
 
 			err := json.Unmarshal([]byte(tool.Function.Arguments), &toolArguments)
 			if err != nil {
-				DebugPrint("[ERROR] parsing arguments: %v\n", err)
+				if PrintHook != nil {
+					PrintHook(fmt.Sprintf("[ERROR] parsing arguments: %v\n", err))
+				} else {
+					DebugPrint("[ERROR] parsing arguments: %v\n", err)
+				}
 				continue
+			}
+
+			if StatusHook != nil {
+				StatusHook(fmt.Sprintf("⚡ %s", summarizeToolCall(tool.Function.Name, toolArguments)))
+			}
+			if PrintHook != nil {
+				PrintHook(fmt.Sprintf("🔧 %s\n", summarizeToolCall(tool.Function.Name, toolArguments)))
 			}
 
 			toolResult, err := ExecuteTool(tool.Function.Name, toolArguments)
@@ -532,4 +540,102 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 	}
 
 	return ""
+}
+
+
+func summarizeToolCall(name string, args map[string]any) string {
+	switch name {
+	case "bash_tool":
+		if reason, ok := args["reason"].(string); ok && reason != "" {
+			return reason
+		}
+		if cmd, ok := args["command"].(string); ok && cmd != "" {
+			if len(cmd) > 60 {
+				return cmd[:60] + "..."
+			}
+			return cmd
+		}
+	case "spawn_agents":
+		if reason, ok := args["reason"].(string); ok && reason != "" {
+			return "Spawning agents \u2014 " + reason
+		}
+		if agents, ok := args["sub_agents"].([]any); ok {
+			return fmt.Sprintf("Spawning %d sub-agents", len(agents))
+		}
+	case "web_search":
+		if topic, ok := args["topic"].(string); ok && topic != "" {
+			if len(topic) > 60 {
+				return "Searching: \u201c" + topic[:60] + "...\u201d"
+			}
+			return "Searching: \u201c" + topic + "\u201d"
+		}
+	case "url_fetch":
+		if url, ok := args["url"].(string); ok && url != "" {
+			if len(url) > 60 {
+				return "Fetching: " + url[:60] + "..."
+			}
+			return "Fetching: " + url
+		}
+	case "mail":
+		if reason, ok := args["reason"].(string); ok && reason != "" {
+			return "Mail \u2014 " + reason
+		}
+		if action, ok := args["action"].(string); ok && action != "" {
+			return "Mail: " + action
+		}
+	case "schedule_task", "local_schedule_task":
+		if reason, ok := args["reason"].(string); ok && reason != "" {
+			return "Scheduling \u2014 " + reason
+		}
+		if task, ok := args["task"].(string); ok && task != "" {
+			if len(task) > 60 {
+				return "Schedule: " + task[:60] + "..."
+			}
+			return "Schedule: " + task
+		}
+	case "memory_add":
+		if reason, ok := args["reason"].(string); ok && reason != "" {
+			return "Remembering \u2014 " + reason
+		}
+		if content, ok := args["content"].(string); ok && content != "" {
+			if len(content) > 60 {
+				return "Remembering: " + content[:60] + "..."
+			}
+			return "Remembering: " + content
+		}
+	case "memory_view":
+		return "Viewing stored memories"
+	case "memory_delete":
+		if id, ok := args["memory_id"].(string); ok && id != "" {
+			return "Deleting memory: " + id
+		}
+	case "memory_update":
+		if id, ok := args["memory_id"].(string); ok && id != "" {
+			return "Updating memory: " + id
+		}
+	case "send_document_over_telegram":
+		if path, ok := args["filepath"].(string); ok && path != "" {
+			return "Sending document: " + path
+		}
+	case "send_image_over_telegram":
+		if path, ok := args["filepath"].(string); ok && path != "" {
+			return "Sending image: " + path
+		}
+	case "cancel_task", "local_cancel_task":
+		if id, ok := args["task_id"].(string); ok && id != "" {
+			return "Cancelling task: " + id
+		}
+	case "list_scheduled_tasks", "local_list_scheduled_tasks":
+		return "Listing scheduled tasks"
+	}
+
+	// Fallback: try to find a "reason" field in any tool
+	if reason, ok := args["reason"].(string); ok && reason != "" {
+		if len(reason) > 60 {
+			return reason[:60] + "..."
+		}
+		return reason
+	}
+
+	return name
 }
