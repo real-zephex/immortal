@@ -147,6 +147,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending++
 			m.statusText = pendingStatus(m.pending)
 			return m, tea.Batch(m.spinner.Tick, sendUserMessage(m.ctx, m.eventsCh, input))
+		case "pgup", "pgdown":
 		default:
 			if !isTextInputKey(msg) {
 				return m, nil
@@ -248,7 +249,7 @@ func (m *tuiModel) resize(width, height int) {
 		statusLines = 1
 	}
 	m.viewport.Width = max(1, width)
-	m.viewport.Height = max(1, height-headerHeight-statusLines-2)
+	m.viewport.Height = max(1, height-headerHeight-statusLines-1)
 
 	promptPrefix := PromptStyle.Render("❯") + " "
 	m.textinput.Width = max(1, width-lipgloss.Width(promptPrefix))

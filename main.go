@@ -200,6 +200,14 @@ func main() {
 		<-sigs
 		fmt.Println("\nShutting down...")
 		cancel()
+		select {
+		case <-sigs:
+			fmt.Println("Force exiting...")
+			os.Exit(1)
+		case <-time.After(1 * time.Second):
+			fmt.Println("Shutdown timeout, force exiting...")
+			os.Exit(1)
+		}
 	}()
 
 	// changes here for full blown audio based agent
