@@ -127,16 +127,40 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 				params = append(params, openai.UserMessage(content))
 			}
 
+			// Per-task cancellation: ESC in TUI sends to AbortCh, which cancels taskCtx
+			originalLen := len(params)
+			taskCtx, taskCancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			aborted := make(chan struct{})
+			go func() {
+				select {
+				case <-utils.AbortCh:
+					close(aborted)
+					taskCancel()
+				case <-done:
+				}
+			}()
+
 			response := func() (r string) {
 				defer func() {
+					close(done)
+					taskCancel()
 					if rec := recover(); rec != nil {
 						errMsg := fmt.Sprintf("panic: %v", rec)
 						utils.DebugPrint("[PANIC] %s\n", errMsg)
 						r = ""
 					}
 				}()
-				return utils.OpenAIManager(ctx, &params)
+				return utils.OpenAIManager(taskCtx, &params)
 			}()
+
+			select {
+			case <-aborted:
+				if !isScheduled {
+					params = params[:originalLen]
+				}
+			default:
+			}
 
 			if response != "" {
 				responses++
@@ -220,6 +244,7 @@ func main() {
 	wg.Add(2)
 	eventsChannels := make(chan utils.Event, 100)
 	responseCh := make(chan string, 100)
+	utils.AbortCh = make(chan struct{})
 	utils.InitLocalScheduler(eventsChannels)
 
 	go PushToChannelA(ctx, eventsChannels, &wg)

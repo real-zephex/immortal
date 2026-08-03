@@ -8,3 +8,5 @@ type Event struct {
 	Type    EventType `json:"event"`
 	Payload any
 }
+
+var AbortCh chan struct{}

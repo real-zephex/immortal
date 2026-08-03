@@ -2,65 +2,144 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Catppuccin Mocha Palette
+// Modern Color Palette (Catppuccin Mocha / Tokyo Night inspired)
 var (
-	MochaMauve   = lipgloss.Color("#cba6f7")
-	MochaBlue    = lipgloss.Color("#89b4fa")
-	MochaPink    = lipgloss.Color("#f5c2e7")
-	MochaGreen   = lipgloss.Color("#a6e3a1")
-	MochaYellow  = lipgloss.Color("#f9e2af")
-	MochaText    = lipgloss.Color("#cdd6f4")
-	MochaBase    = lipgloss.Color("#1e1e2e")
-	MochaSurface = lipgloss.Color("#313244")
-	MochaOverlay = lipgloss.Color("#6c7086") // Used for subtle/faint text
+	ColorMauve    = lipgloss.Color("#cba6f7")
+	ColorBlue     = lipgloss.Color("#89b4fa")
+	ColorCyan     = lipgloss.Color("#89dceb")
+	ColorTeal     = lipgloss.Color("#94e2d5")
+	ColorGreen    = lipgloss.Color("#a6e3a1")
+	ColorYellow   = lipgloss.Color("#f9e2af")
+	ColorPeach    = lipgloss.Color("#fab387")
+	ColorRed      = lipgloss.Color("#f38ba8")
+	ColorLavender = lipgloss.Color("#b4befe")
+	ColorText     = lipgloss.Color("#cdd6f4")
+	ColorSubtext  = lipgloss.Color("#a6adc8")
+	ColorOverlay  = lipgloss.Color("#6c7086")
+	ColorSurface  = lipgloss.Color("#313244")
+	ColorMantle   = lipgloss.Color("#181825")
+	ColorBase     = lipgloss.Color("#1e1e2e")
+	ColorBorder   = lipgloss.Color("#45475a")
 )
 
 var (
-	// User messages align right/distinct
-	UserMsgStyle = lipgloss.NewStyle().
-			Foreground(MochaText).
-			Border(lipgloss.NormalBorder(), false, false, false, true).
-			BorderForeground(MochaBlue).
-			Padding(0, 0, 0, 1).
+	// Backward compatibility references for existing code/tests
+	MochaMauve   = ColorMauve
+	MochaBlue    = ColorBlue
+	MochaPink    = ColorRed
+	MochaGreen   = ColorGreen
+	MochaYellow  = ColorYellow
+	MochaText    = ColorText
+	MochaBase    = ColorBase
+	MochaSurface = ColorSurface
+	MochaOverlay = ColorOverlay
+)
+
+var (
+	// Top Header Elements
+	LogoBadgeStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorBase).
+			Background(ColorMauve).
+			Padding(0, 1)
+
+	ModelBadgeStyle = lipgloss.NewStyle().
+			Foreground(ColorLavender).
+			Background(ColorSurface).
+			Padding(0, 1).
 			Bold(true)
 
-	// AI Assistant messages
-	AssistantMsgStyle = lipgloss.NewStyle().
-				Foreground(MochaText)
+	StatusIdleStyle = lipgloss.NewStyle().
+			Foreground(ColorGreen).
+			Bold(true)
 
-	// Main scrolling window
+	StatusActiveStyle = lipgloss.NewStyle().
+			Foreground(ColorYellow).
+			Bold(true)
+
+	StatusErrorStyle = lipgloss.NewStyle().
+			Foreground(ColorRed).
+			Bold(true)
+
+	HeaderStyle = lipgloss.NewStyle().
+			Background(ColorMantle).
+			Border(lipgloss.NormalBorder(), false, false, true, false).
+			BorderForeground(ColorBorder)
+
+	// User Messages
+	UserHeaderStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorBlue)
+
+	UserMsgStyle = lipgloss.NewStyle().
+			Foreground(ColorText).
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(ColorBlue).
+			Padding(0, 0, 0, 1)
+
+	// Assistant Messages
+	AssistantHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorMauve)
+
+	AssistantMsgStyle = lipgloss.NewStyle().
+				Foreground(ColorText)
+
+	// Tool Executions & Logs
+	ToolTagStyle = lipgloss.NewStyle().
+			Foreground(ColorTeal).
+			Bold(true)
+
+	ToolCallStyle = lipgloss.NewStyle().
+			Foreground(ColorTeal).
+			Italic(true)
+
+	ToolBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(ColorTeal).
+			Padding(0, 0, 0, 1)
+
+	// System / Error / General Text
+	SubtleStyle = lipgloss.NewStyle().
+			Foreground(ColorOverlay).
+			Italic(true)
+
+	StatusStyle = lipgloss.NewStyle().
+			Foreground(ColorYellow).
+			Bold(true)
+
+	ErrorMsgStyle = lipgloss.NewStyle().
+			Foreground(ColorRed).
+			Bold(true)
+
+	// Input Container & Prompt
+	PromptStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorMauve)
+
+	InputBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorBorder).
+			Padding(0, 1)
+
+	InputBoxActiveStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorMauve).
+				Padding(0, 1)
+
+	// Viewport Container
 	ViewportStyle = lipgloss.NewStyle().
 			Padding(0, 0)
 
-	// Top banner
-	HeaderStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(MochaBase).
-			Background(MochaMauve).
+	// Footer / Keybindings bar
+	FooterStyle = lipgloss.NewStyle().
+			Foreground(ColorSubtext).
+			Background(ColorMantle).
 			Padding(0, 1)
 
-	// Faint/meta text
-	SubtleStyle = lipgloss.NewStyle().
-			Foreground(MochaOverlay).
-			Italic(true)
-
-	// Status line when processing
-	StatusStyle = lipgloss.NewStyle().
-			Foreground(MochaYellow).
-			Bold(true)
-
-	// Input prompt ❯
-	PromptStyle = lipgloss.NewStyle().
+	KeyBadgeStyle = lipgloss.NewStyle().
+			Foreground(ColorText).
+			Background(ColorSurface).
 			Bold(true).
-			Foreground(MochaPink)
-
-	// System logs/Tool calls
-	ToolCallStyle = lipgloss.NewStyle().
-			Foreground(MochaGreen).
-			Italic(true)
-
-	// Error/debug messages
-	ErrorMsgStyle = lipgloss.NewStyle().
-			Foreground(MochaPink).
-			Bold(true)
+			Padding(0, 1)
 )

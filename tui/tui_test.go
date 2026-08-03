@@ -7,7 +7,7 @@ import (
 
 	"immortal/utils"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -55,14 +55,14 @@ func TestCommandInputIsNotSentToAgent(t *testing.T) {
 	events := make(chan utils.Event, 1)
 	model := testModel(ctx, cancel)
 	model.eventsCh = events
-	model.textinput.SetValue("/help")
+	model.textarea.SetValue("/help")
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected /help to be handled synchronously")
 	}
 
-	got := updated.(tuiModel)
+	got := updated.(*tuiModel)
 	if got.pending != 0 || got.thinking {
 		t.Fatalf("expected no pending agent work, got pending=%d thinking=%v", got.pending, got.thinking)
 	}
@@ -71,6 +71,21 @@ func TestCommandInputIsNotSentToAgent(t *testing.T) {
 	}
 	if !strings.Contains(got.renderContent(), "/clear") {
 		t.Fatal("expected help content to be rendered")
+	}
+}
+
+func TestAltEnterInsertsNewline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	model := testModel(ctx, cancel)
+	model.textarea.SetValue("line 1")
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	got := updated.(*tuiModel)
+
+	if !strings.Contains(got.textarea.Value(), "\n") {
+		t.Fatalf("expected newline inserted into input, got %q", got.textarea.Value())
 	}
 }
 
@@ -84,13 +99,13 @@ func TestPendingStateTracksMultipleResponses(t *testing.T) {
 	model.statusText = pendingStatus(model.pending)
 
 	updated, _ := model.Update(responseMsg("first"))
-	got := updated.(tuiModel)
+	got := updated.(*tuiModel)
 	if !got.thinking || got.pending != 1 || got.statusText != "Processing..." {
 		t.Fatalf("expected one pending response, got pending=%d thinking=%v status=%q", got.pending, got.thinking, got.statusText)
 	}
 
 	updated, _ = got.Update(responseMsg("second"))
-	got = updated.(tuiModel)
+	got = updated.(*tuiModel)
 	if got.thinking || got.pending != 0 || got.statusText != "" {
 		t.Fatalf("expected pending state to clear, got pending=%d thinking=%v status=%q", got.pending, got.thinking, got.statusText)
 	}
@@ -131,15 +146,15 @@ func TestAddHistoryDeduplicatesAndCapsEntries(t *testing.T) {
 	}
 }
 
-func testModel(ctx context.Context, cancel context.CancelFunc) tuiModel {
-	ti := textinput.New()
+func testModel(ctx context.Context, cancel context.CancelFunc) *tuiModel {
+	ta := textarea.New()
 	vp := viewport.New(80, 20)
-	return tuiModel{
-		ctx:       ctx,
-		cancel:    cancel,
-		textinput: ti,
-		viewport:  vp,
-		width:     80,
-		height:    24,
+	return &tuiModel{
+		ctx:      ctx,
+		cancel:   cancel,
+		textarea: ta,
+		viewport: vp,
+		width:    80,
+		height:   24,
 	}
 }

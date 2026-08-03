@@ -479,9 +479,9 @@ func OpenAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 }
 
 func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolUnionParam) string {
-	maxToolIterations := 40
+	// maxToolIterations := 40
 
-	for range maxToolIterations {
+	for {
 		chatCompletion, err := openaiClient.Chat.Completions.New(
 			ctx,
 			openai.ChatCompletionNewParams{
@@ -541,7 +541,6 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 
 	return ""
 }
-
 
 func summarizeToolCall(name string, args map[string]any) string {
 	switch name {
