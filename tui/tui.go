@@ -207,13 +207,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						content = SubtleStyle.Render("No stored memories found.")
 					} else {
 						var sb strings.Builder
-						sb.WriteString("\n" + AssistantHeaderStyle.Render("✦ STORED MEMORIES") + "\n\n")
+						sb.WriteString("\n" + AssistantHeaderStyle.Render("✦ STORED MEMORIES") + "\n")
+						sb.WriteString(SubtleStyle.Render("  Use full ID with memory_delete tool\n") + "\n")
 						for _, r := range records {
-							idShort := r.ID
-							if len(idShort) > 8 {
-								idShort = idShort[:8]
-							}
-							sb.WriteString("  " + KeyBadgeStyle.Render(idShort) + " " + r.Content + "\n")
+							sb.WriteString("  " + KeyBadgeStyle.Render(r.ID) + " " + r.Content + "\n")
 						}
 						content = sb.String()
 					}
@@ -674,9 +671,72 @@ func formatToolLog(text string) string {
 		) + "\n"
 	}
 
+	if strings.HasPrefix(cleanText, "TOOL:") {
+		parts := strings.SplitN(cleanText, "|||", 3)
+		if len(parts) == 3 {
+			toolName := strings.TrimPrefix(parts[0], "TOOL:")
+			summary := parts[1]
+			details := parts[2]
+			return formatStructuredToolLog(toolName, summary, details)
+		}
+	}
+
 	return "\n" + ToolBoxStyle.Render(
 		ToolTagStyle.Render("⚡ TOOL")+" "+ToolCallStyle.Render(cleanText),
 	) + "\n"
+}
+
+func formatStructuredToolLog(toolName, summary, details string) string {
+	icon := "⚡"
+	toolColor := ColorTeal
+
+	switch toolName {
+	case "bash_tool":
+		icon = "⟩"
+		toolColor = ColorBlue
+	case "web_search":
+		icon = "🔍"
+		toolColor = ColorCyan
+	case "url_fetch":
+		icon = "📄"
+		toolColor = ColorCyan
+	case "mail":
+		icon = "✉"
+		toolColor = ColorPeach
+	case "memory_add", "memory_view", "memory_update", "memory_delete":
+		icon = "🧠"
+		toolColor = ColorLavender
+	case "spawn_agents":
+		icon = "⧉"
+		toolColor = ColorGreen
+	case "schedule_task", "local_schedule_task", "cancel_task", "local_cancel_task":
+		icon = "⏰"
+		toolColor = ColorYellow
+	case "send_document_over_telegram", "send_image_over_telegram":
+		icon = "📎"
+		toolColor = ColorMauve
+	case "list_scheduled_tasks", "local_list_scheduled_tasks":
+		icon = "📋"
+		toolColor = ColorYellow
+	}
+
+	nameStyle := lipgloss.NewStyle().Foreground(toolColor).Bold(true)
+	summaryStyle := lipgloss.NewStyle().Foreground(ColorSubtext)
+
+	var sb strings.Builder
+	sb.WriteString("\n")
+	sb.WriteString(ToolTagStyle.Render(icon) + " " + nameStyle.Render(toolName) + " " + summaryStyle.Render(summary) + "\n")
+
+	if details != "" {
+		for _, line := range strings.Split(details, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			sb.WriteString("  " + SubtleStyle.Render(line) + "\n")
+		}
+	}
+
+	return sb.String() + "\n"
 }
 
 func renderToStringWithWidth(text string, width int) string {

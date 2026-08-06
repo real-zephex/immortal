@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -523,14 +524,18 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 				continue
 			}
 
+			toolName := tool.Function.Name
+			summary := summarizeToolCall(toolName, toolArguments)
+			details := formatToolDetails(toolName, toolArguments)
+
 			if StatusHook != nil {
-				StatusHook(fmt.Sprintf("⚡ %s", summarizeToolCall(tool.Function.Name, toolArguments)))
+				StatusHook(fmt.Sprintf("⚡ %s", summary))
 			}
 			if PrintHook != nil {
-				PrintHook(fmt.Sprintf("🔧 %s\n", summarizeToolCall(tool.Function.Name, toolArguments)))
+				PrintHook(fmt.Sprintf("TOOL:%s|||%s|||%s\n", toolName, summary, details))
 			}
 
-			toolResult, err := ExecuteTool(tool.Function.Name, toolArguments)
+			toolResult, err := ExecuteTool(toolName, toolArguments)
 			if err != nil {
 				toolResult = err.Error()
 			}
@@ -545,90 +550,75 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 func summarizeToolCall(name string, args map[string]any) string {
 	switch name {
 	case "bash_tool":
-		if reason, ok := args["reason"].(string); ok && reason != "" {
-			return reason
-		}
 		if cmd, ok := args["command"].(string); ok && cmd != "" {
 			if len(cmd) > 60 {
-				return cmd[:60] + "..."
+				return "bash: " + cmd[:60] + "..."
 			}
-			return cmd
+			return "bash: " + cmd
 		}
 	case "spawn_agents":
-		if reason, ok := args["reason"].(string); ok && reason != "" {
-			return "Spawning agents \u2014 " + reason
-		}
 		if agents, ok := args["sub_agents"].([]any); ok {
-			return fmt.Sprintf("Spawning %d sub-agents", len(agents))
+			return fmt.Sprintf("spawn %d sub-agents", len(agents))
 		}
+		return "spawn agents"
 	case "web_search":
 		if topic, ok := args["topic"].(string); ok && topic != "" {
 			if len(topic) > 60 {
-				return "Searching: \u201c" + topic[:60] + "...\u201d"
+				return "search: " + topic[:60] + "..."
 			}
-			return "Searching: \u201c" + topic + "\u201d"
+			return "search: " + topic
 		}
 	case "url_fetch":
-		if url, ok := args["url"].(string); ok && url != "" {
-			if len(url) > 60 {
-				return "Fetching: " + url[:60] + "..."
+		if u, ok := args["url"].(string); ok && u != "" {
+			if len(u) > 60 {
+				return "fetch: " + u[:60] + "..."
 			}
-			return "Fetching: " + url
+			return "fetch: " + u
 		}
 	case "mail":
-		if reason, ok := args["reason"].(string); ok && reason != "" {
-			return "Mail \u2014 " + reason
-		}
 		if action, ok := args["action"].(string); ok && action != "" {
-			return "Mail: " + action
+			return "mail: " + action
 		}
 	case "schedule_task", "local_schedule_task":
-		if reason, ok := args["reason"].(string); ok && reason != "" {
-			return "Scheduling \u2014 " + reason
-		}
 		if task, ok := args["task"].(string); ok && task != "" {
 			if len(task) > 60 {
-				return "Schedule: " + task[:60] + "..."
+				return "schedule: " + task[:60] + "..."
 			}
-			return "Schedule: " + task
+			return "schedule: " + task
 		}
 	case "memory_add":
-		if reason, ok := args["reason"].(string); ok && reason != "" {
-			return "Remembering \u2014 " + reason
-		}
 		if content, ok := args["content"].(string); ok && content != "" {
 			if len(content) > 60 {
-				return "Remembering: " + content[:60] + "..."
+				return "memory add: " + content[:60] + "..."
 			}
-			return "Remembering: " + content
+			return "memory add: " + content
 		}
 	case "memory_view":
-		return "Viewing stored memories"
+		return "list memories"
 	case "memory_delete":
 		if id, ok := args["memory_id"].(string); ok && id != "" {
-			return "Deleting memory: " + id
+			return "memory delete: " + id
 		}
 	case "memory_update":
 		if id, ok := args["memory_id"].(string); ok && id != "" {
-			return "Updating memory: " + id
+			return "memory update: " + id
 		}
 	case "send_document_over_telegram":
 		if path, ok := args["filepath"].(string); ok && path != "" {
-			return "Sending document: " + path
+			return "send document: " + path
 		}
 	case "send_image_over_telegram":
 		if path, ok := args["filepath"].(string); ok && path != "" {
-			return "Sending image: " + path
+			return "send image: " + path
 		}
 	case "cancel_task", "local_cancel_task":
 		if id, ok := args["task_id"].(string); ok && id != "" {
-			return "Cancelling task: " + id
+			return "cancel task: " + id
 		}
 	case "list_scheduled_tasks", "local_list_scheduled_tasks":
-		return "Listing scheduled tasks"
+		return "list tasks"
 	}
 
-	// Fallback: try to find a "reason" field in any tool
 	if reason, ok := args["reason"].(string); ok && reason != "" {
 		if len(reason) > 60 {
 			return reason[:60] + "..."
@@ -637,4 +627,110 @@ func summarizeToolCall(name string, args map[string]any) string {
 	}
 
 	return name
+}
+
+func formatToolDetails(name string, args map[string]any) string {
+	switch name {
+	case "bash_tool":
+		cmd, _ := args["command"].(string)
+		reason, _ := args["reason"].(string)
+		var b strings.Builder
+		if cmd != "" {
+			b.WriteString("Command: " + cmd)
+		}
+		if reason != "" {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("Reason:  " + reason)
+		}
+		return b.String()
+
+	case "spawn_agents":
+		agents, ok := args["sub_agents"].([]any)
+		if !ok || len(agents) == 0 {
+			return ""
+		}
+		var b strings.Builder
+		for i, raw := range agents {
+			agent, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			task, _ := agent["task"].(string)
+			if task != "" {
+				b.WriteString(fmt.Sprintf("  Agent %d: %s\n", i+1, task))
+			}
+		}
+		reason, _ := args["reason"].(string)
+		if reason != "" {
+			b.WriteString("Reason: " + reason)
+		}
+		return strings.TrimRight(b.String(), "\n")
+
+	case "web_search":
+		topic, _ := args["topic"].(string)
+		return "Query: " + topic
+
+	case "url_fetch":
+		u, _ := args["url"].(string)
+		return "URL: " + u
+
+	case "mail":
+		action, _ := args["action"].(string)
+		var b strings.Builder
+		b.WriteString("Action: " + action)
+		if to, ok := args["to"].(string); ok && to != "" {
+			b.WriteString("\nTo:      " + to)
+		}
+		if subject, ok := args["subject"].(string); ok && subject != "" {
+			b.WriteString("\nSubject: " + subject)
+		}
+		if threadID, ok := args["thread_id"].(string); ok && threadID != "" {
+			b.WriteString("\nThread:  " + threadID)
+		}
+		if messageID, ok := args["message_id"].(string); ok && messageID != "" {
+			b.WriteString("\nMessage: " + messageID)
+		}
+		return b.String()
+
+	case "schedule_task", "local_schedule_task":
+		task, _ := args["task"].(string)
+		interval, _ := args["interval"].(string)
+		repeat, _ := args["repeat"].(bool)
+		repeatStr := "one-shot"
+		if repeat {
+			repeatStr = "repeating"
+		}
+		return fmt.Sprintf("Task:     %s\nInterval: %s (%s)", task, interval, repeatStr)
+
+	case "memory_add":
+		content, _ := args["content"].(string)
+		return "Content: " + content
+
+	case "memory_view":
+		return ""
+
+	case "memory_delete":
+		id, _ := args["memory_id"].(string)
+		return "ID: " + id
+
+	case "memory_update":
+		id, _ := args["memory_id"].(string)
+		content, _ := args["content"].(string)
+		return fmt.Sprintf("ID:      %s\nContent: %s", id, content)
+
+	case "send_document_over_telegram", "send_image_over_telegram":
+		path, _ := args["filepath"].(string)
+		return "File: " + path
+
+	case "cancel_task", "local_cancel_task":
+		id, _ := args["task_id"].(string)
+		return "Task ID: " + id
+
+	case "list_scheduled_tasks", "local_list_scheduled_tasks":
+		return ""
+	}
+
+	return ""
 }

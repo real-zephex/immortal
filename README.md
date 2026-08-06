@@ -53,6 +53,18 @@ go build -o agent
 
 By default, `./agent` will start in **TUI mode** if a terminal is detected.
 
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--base-url` | LLM API base URL (default: `https://openrouter.ai/api/v1`) |
+| `--model` | LLM model name (default: `deepseek-v4-flash`) |
+| `--tui` | Force TUI mode |
+| `--no-tui` | Disable TUI mode (headless) |
+| `--no-tg` | Disable Telegram bot |
+| `--clear` | Clear all conversation history and exit |
+| `--test` | Test mode — no TUI, no Telegram |
+
 ## Telegram
 
 Telegram support starts automatically when `TELEGRAM_BOT_TOKEN` is set.
@@ -64,7 +76,7 @@ Features:
 
 ## Persistent State
 
-State is stored in SQLite at `~/.immortal-agent.db`. Conversations are partitioned by `channel` (e.g., `default`, `tui:default`, or `telegram:<chat_id>`).
+State is stored in SQLite at `~/.immortal-agent.db`. Conversations are partitioned by `channel` (e.g., `default`, `tui:default`, or `telegram:<chat_id>`). Long-term memories are stored in a separate `memories` table, indexed by content hash.
 
 ## Tools
 
@@ -75,6 +87,12 @@ State is stored in SQLite at `~/.immortal-agent.db`. Conversations are partition
 - `url_fetch`: Read URL content via Jina.
 - `mail`: Full AgentMail inbox management.
 
+### Memory Tools
+- `memory_add`: Store a fact or preference for long-term recall. Deduplicates by content.
+- `memory_view`: List all stored memories.
+- `memory_update`: Update an existing memory by ID.
+- `memory_delete`: Remove a memory by ID.
+
 ### Scheduling Tools
 - **Telegram**: `schedule_task`, `cancel_task`, `list_scheduled_tasks`.
 - **Local**: `local_schedule_task`, `local_cancel_task`, `local_list_scheduled_tasks`.
@@ -83,16 +101,23 @@ State is stored in SQLite at `~/.immortal-agent.db`. Conversations are partition
 
 ```text
 .
-├── main.go             # Lifecycle, DB init, event routing
-├── tui/                # Bubble Tea TUI components and styling
+├── main.go              # Lifecycle, DB init, event routing
+├── tui/                 # Bubble Tea TUI components and styling
+│   ├── tui.go
+│   ├── styles.go
+│   └── tui_test.go
 └── utils/
-    ├── db.go           # SQLite conversation persistence
-    ├── openai.go       # Tool schemas and LLM loop
-    ├── telegram.go     # Bot logic and voice transcription
-    ├── tool_mail.go    # AgentMail integration
+    ├── db.go            # SQLite conversation persistence
+    ├── openai.go        # Tool schemas and LLM loop
+    ├── telegram.go      # Bot logic and voice transcription
+    ├── tool_mail.go     # AgentMail integration
     ├── tools_manager.go # Tool dispatcher
     ├── local_scheduler.go # Background local task manager
-    └── scheduler.go    # Telegram task manager
+    ├── scheduler.go     # Telegram task manager
+    ├── memory.go        # Long-term memory (SQLite)
+    ├── events.go        # Event types and channels
+    ├── groq.go          # Groq API client (voice, chat)
+    └── hooks.go         # Debug/print hooks for TUI
 ```
 
 ## Requirements

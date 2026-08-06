@@ -471,7 +471,7 @@ func executeMemoryView(_ map[string]any) (string, error) {
 	}
 	var b strings.Builder
 	for _, r := range records {
-		b.WriteString(fmt.Sprintf("[%s] %s\n", r.ID[:8], r.Content))
+		b.WriteString(fmt.Sprintf("[%s] %s\n", r.ID, r.Content))
 	}
 	return b.String(), nil
 }
