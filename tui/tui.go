@@ -658,7 +658,13 @@ func formatUserMessage(text string, width int) string {
 func formatAssistantMessage(text string, width int) string {
 	header := AssistantHeaderStyle.Render("✦ ASSISTANT")
 	rendered := renderToStringWithWidth(text, width-2)
-	return fmt.Sprintf("\n%s\n%s\n", header, AssistantMsgStyle.Render(rendered))
+	lines := strings.Split(rendered, "\n")
+	var formatted strings.Builder
+	formatted.WriteString("\n" + header + "\n")
+	for _, line := range lines {
+		formatted.WriteString(AssistantMsgStyle.Render(line) + "\n")
+	}
+	return formatted.String()
 }
 
 func formatToolLog(text string) string {
@@ -756,7 +762,7 @@ func renderToStringWithWidth(text string, width int) string {
 	if err != nil {
 		return text
 	}
-	return out
+	return strings.Trim(out, " \n\t")
 }
 
 func wrapText(text string, limit int) string {

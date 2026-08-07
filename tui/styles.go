@@ -83,7 +83,10 @@ var (
 				Foreground(ColorMauve)
 
 	AssistantMsgStyle = lipgloss.NewStyle().
-				Foreground(ColorText)
+			Foreground(ColorText).
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(ColorMauve).
+			Padding(0, 0, 0, 1)
 
 	// Tool Executions & Logs
 	ToolTagStyle = lipgloss.NewStyle().
