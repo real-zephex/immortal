@@ -3,9 +3,10 @@ package utils
 import "fmt"
 
 var (
-	PrintHook  func(string)
-	StatusHook func(string)
-	DebugHook  func(string)
+	PrintHook        func(string)
+	StatusHook       func(string)
+	DebugHook        func(string)
+	IntermediateHook func(string) // Called when model returns content + tool calls
 )
 
 // DebugPrint routes debug output through DebugHook when set (TUI mode),

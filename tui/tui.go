@@ -22,6 +22,7 @@ import (
 )
 
 type responseMsg string
+type intermediateMsg string
 type statusMsg string
 type logMsg string
 type sendErrorMsg string
@@ -288,6 +289,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resize(m.width, m.height)
 			cmds = append(cmds, cmd)
 		}
+
+	case intermediateMsg:
+		intermediateText := string(msg)
+		if intermediateText != "" {
+			m.messages = append(m.messages, formatAssistantMessage(intermediateText, m.viewport.Width))
+			m.viewport.SetContent(m.renderContent())
+			m.viewport.GotoBottom()
+		}
+		return m, nil
 
 	case responseMsg:
 		if m.aborted {
@@ -607,15 +617,18 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 	prevPrintHook := utils.PrintHook
 	prevStatusHook := utils.StatusHook
 	prevDebugHook := utils.DebugHook
+	prevIntermediateHook := utils.IntermediateHook
 
 	utils.PrintHook = func(text string) { p.Send(logMsg(text)) }
 	utils.StatusHook = func(status string) { p.Send(statusMsg(status)) }
 	utils.DebugHook = func(string) {}
+	utils.IntermediateHook = func(text string) { p.Send(intermediateMsg(text)) }
 
 	defer func() {
 		utils.PrintHook = prevPrintHook
 		utils.StatusHook = prevStatusHook
 		utils.DebugHook = prevDebugHook
+		utils.IntermediateHook = prevIntermediateHook
 	}()
 
 	if _, err := p.Run(); err != nil {

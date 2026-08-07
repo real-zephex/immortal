@@ -149,6 +149,7 @@ func TestAddHistoryDeduplicatesAndCapsEntries(t *testing.T) {
 func testModel(ctx context.Context, cancel context.CancelFunc) *tuiModel {
 	ta := textarea.New()
 	vp := viewport.New(80, 20)
+	model := "test-model"
 	return &tuiModel{
 		ctx:      ctx,
 		cancel:   cancel,
@@ -156,5 +157,6 @@ func testModel(ctx context.Context, cancel context.CancelFunc) *tuiModel {
 		viewport: vp,
 		width:    80,
 		height:   24,
+		model:    &model,
 	}
 }

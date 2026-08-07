@@ -490,6 +490,7 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 				Model:             currentModel,
 				Tools:             tools,
 				ParallelToolCalls: openai.Bool(true),
+				ReasoningEffort:   "medium",
 			},
 		)
 		if err != nil {
@@ -508,6 +509,11 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 
 		if len(toolCalls) == 0 {
 			return chatCompletion.Choices[0].Message.Content
+		}
+
+		// Display intermediate content when there are tool calls
+		if IntermediateHook != nil && chatCompletion.Choices[0].Message.Content != "" {
+			IntermediateHook(chatCompletion.Choices[0].Message.Content)
 		}
 
 		DebugPrint("===Tool Calls===\n")
@@ -544,7 +550,6 @@ func openAIManagerWithTools(ctx context.Context, localMessages *[]openai.ChatCom
 		}
 	}
 
-	return ""
 }
 
 func summarizeToolCall(name string, args map[string]any) string {
