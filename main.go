@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"immortal/tui"
 	"immortal/utils"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -25,6 +26,7 @@ var (
 	flagTUI     = flag.Bool("tui", false, "force TUI mode")
 	flagNoTUI   = flag.Bool("no-tui", false, "disable TUI mode (headless)")
 	flagNoTG    = flag.Bool("no-tg", false, "disable Telegram bot")
+	flagWeb     = flag.Bool("web", false, "enable WebSocket web server")
 	testFlag    = flag.Bool("test", false, "run in test mode (no TUI, no Telegram)")
 )
 
@@ -104,6 +106,7 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 			if !ok {
 				continue
 			}
+			log.Printf("[agent] received user message: %s", content)
 
 			// Detect scheduled task firings (⏰ prefix) — log them but
 			// don't persist to conversation history (ephemeral).
@@ -163,6 +166,11 @@ func runAgent(wg *sync.WaitGroup, ctx context.Context, events <-chan utils.Event
 			}
 
 			if response != "" {
+				// Broadcast the final assistant reply to web clients (no-op otherwise).
+				if utils.ResponseHook != nil {
+					utils.ResponseHook(response)
+				}
+
 				responses++
 				currentCount := responses
 				timestamp := time.Now().Format("2006-01-02 15:04:05")
@@ -257,6 +265,17 @@ func main() {
 			utils.StartTelegramBot(ctx, db)
 		})
 		fmt.Println("Telegram bot goroutine started.")
+	}
+
+	// Start WebSocket server if --web flag is set
+	if *flagWeb {
+		webServer := utils.NewWebServer(eventsChannels, db)
+		webServer.Model = *flagModel
+		webServer.SetupHooks() // Wire up hooks to broadcast
+		wg.Go(func() {
+			webServer.Start(ctx)
+		})
+		fmt.Println("WebSocket server started.")
 	}
 
 	// Start TUI if appropriate

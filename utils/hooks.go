@@ -7,6 +7,8 @@ var (
 	StatusHook       func(string)
 	DebugHook        func(string)
 	IntermediateHook func(string) // Called when model returns content + tool calls
+	ResponseHook     func(string) // Called with the final assistant reply
+	WebHook          *WebServer    // Set to WebServer to broadcast to WebSocket clients
 )
 
 // DebugPrint routes debug output through DebugHook when set (TUI mode),
