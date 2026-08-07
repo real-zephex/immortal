@@ -40,12 +40,12 @@ type tuiModel struct {
 	eventsCh   chan<- utils.Event
 	responseCh <-chan string
 
-	viewport  viewport.Model
-	textarea  textarea.Model
-	spinner   spinner.Model
-	messages  []string
-	width     int
-	height    int
+	viewport viewport.Model
+	textarea textarea.Model
+	spinner  spinner.Model
+	messages []string
+	width    int
+	height   int
 
 	thinking   bool
 	pending    int
@@ -53,6 +53,8 @@ type tuiModel struct {
 	history    []string
 	historyIdx int
 	aborted    bool
+
+	model *string
 }
 
 // Init implements tea.Model.
@@ -62,7 +64,7 @@ func (m *tuiModel) Init() tea.Cmd {
 
 func (m *tuiModel) headerView() string {
 	logo := LogoBadgeStyle.Render(" 🤖 IMMORTAL AGENT ")
-	model := ModelBadgeStyle.Render(" deepseek-v4-flash ")
+	model := ModelBadgeStyle.Render(*m.model)
 
 	var status string
 	if m.thinking {
@@ -76,10 +78,10 @@ func (m *tuiModel) headerView() string {
 	left := lipgloss.JoinHorizontal(lipgloss.Center, logo, " ", model, " ", status)
 	right := SubtleStyle.Render("Alt+Enter: Newline │ Esc: Abort │ /help: Commands │ Ctrl+C: Exit")
 
-	gapWidth := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gapWidth < 1 {
-		gapWidth = 1
-	}
+	gapWidth := max(m.width-lipgloss.Width(left)-lipgloss.Width(right), 1)
+	// if gapWidth < 1 {
+	// 		gapWidth = 1
+	// 	}
 	spacer := strings.Repeat(" ", gapWidth)
 
 	topBar := lipgloss.JoinHorizontal(lipgloss.Center, left, spacer, right)
@@ -232,12 +234,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if t.Repeat {
 								repeatStr = "repeating"
 							}
-							sb.WriteString(fmt.Sprintf("  %s %s (every %s, %s)\n",
+							fmt.Fprintf(&sb, "  %s %s (every %s, %s)\n",
 								KeyBadgeStyle.Render(t.ID),
 								t.Task,
 								t.Interval.String(),
-								repeatStr,
-							))
+								repeatStr)
 						}
 						content = sb.String()
 					}
@@ -251,9 +252,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					sb.WriteString("\n" + AssistantHeaderStyle.Render("✦ SYSTEM STATUS") + "\n\n")
 					sb.WriteString("  " + KeyBadgeStyle.Render("Model") + "        deepseek-v4-flash\n")
 					sb.WriteString("  " + KeyBadgeStyle.Render("Base URL") + "     https://openrouter.ai/api/v1\n")
-					sb.WriteString(fmt.Sprintf("  %s     %d messages in current session\n", KeyBadgeStyle.Render("Messages"), len(m.messages)))
+					fmt.Fprintf(&sb, "  %s     %d messages in current session\n", KeyBadgeStyle.Render("Messages"), len(m.messages))
 					tasks := utils.ListLocalTasks()
-					sb.WriteString(fmt.Sprintf("  %s        %d active background tasks\n", KeyBadgeStyle.Render("Tasks"), len(tasks)))
+					fmt.Fprintf(&sb, "  %s        %d active background tasks\n", KeyBadgeStyle.Render("Tasks"), len(tasks))
 					m.messages = append(m.messages, sb.String()+"\n")
 					m.viewport.SetContent(m.renderContent())
 					m.viewport.GotoBottom()
@@ -374,13 +375,13 @@ func (m *tuiModel) addHistory(input string) {
 
 func (m *tuiModel) adjustInputHeight() {
 	lines := strings.Split(m.textarea.Value(), "\n")
-	numLines := len(lines)
-	if numLines < 1 {
-		numLines = 1
-	}
-	if numLines > maxInputLines {
-		numLines = maxInputLines
-	}
+	numLines := min(max(len(lines), 1), maxInputLines)
+	// if numLines < 1 {
+	// 	numLines = 1
+	// }
+	// if numLines > maxInputLines {
+	// 	numLines = maxInputLines
+	// }
 	if m.textarea.Height() != numLines {
 		m.textarea.SetHeight(numLines)
 	}
@@ -534,11 +535,11 @@ func looksLikeTerminalControlFragment(runes []rune) bool {
 	return strings.HasPrefix(fragment, "[M")
 }
 
-func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh chan<- utils.Event, responseCh <-chan string) {
+func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh chan<- utils.Event, responseCh <-chan string, model *string) {
 	defer cancel()
 
 	ta := textarea.New()
-	ta.Placeholder = "Ask immortal agent something... (Alt+Enter for new line)"
+	ta.Placeholder = fmt.Sprintf("Ask immortal agent - %s something... (Alt+Enter for new line)", *model)
 	ta.Prompt = ""
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 4096
@@ -578,6 +579,7 @@ func RunTUI(ctx context.Context, cancel context.CancelFunc, db *sql.DB, eventsCh
 		textarea:   ta,
 		spinner:    s,
 		viewport:   vp,
+		model:      model,
 	}
 
 	params := utils.LoadConversation(db, "default")
@@ -639,10 +641,10 @@ func formatHelpMenu() string {
 
 func formatUserMessage(text string, width int) string {
 	header := UserHeaderStyle.Render("❯ YOU")
-	wrapLimit := width - 6
-	if wrapLimit < minMessageWidth {
-		wrapLimit = minMessageWidth
-	}
+	wrapLimit := max(width-6, minMessageWidth)
+	// if wrapLimit < minMessageWidth {
+	// 	wrapLimit = minMessageWidth
+	// }
 	wrappedInput := wrapText(text, wrapLimit)
 	lines := strings.Split(wrappedInput, "\n")
 	var formatted strings.Builder
@@ -728,7 +730,7 @@ func formatStructuredToolLog(toolName, summary, details string) string {
 	sb.WriteString(ToolTagStyle.Render(icon) + " " + nameStyle.Render(toolName) + " " + summaryStyle.Render(summary) + "\n")
 
 	if details != "" {
-		for _, line := range strings.Split(details, "\n") {
+		for line := range strings.SplitSeq(details, "\n") {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
@@ -823,7 +825,7 @@ func splitByDisplayWidth(text string, limit int) (string, string) {
 	return text, ""
 }
 
-func extractRoleContent(param interface{}) (string, string) {
+func extractRoleContent(param any) (string, string) {
 	data, err := json.Marshal(param)
 	if err != nil {
 		return "", ""

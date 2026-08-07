@@ -269,7 +269,7 @@ func main() {
 
 	if useTUI {
 		wg.Go(func() {
-			tui.RunTUI(ctx, cancel, db, eventsChannels, responseCh)
+			tui.RunTUI(ctx, cancel, db, eventsChannels, responseCh, flagModel)
 		})
 		fmt.Println("TUI started.")
 	}
